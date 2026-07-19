@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("corridas_etl.quality")
 
 # Fontes que DEVEM ter registros no banco (conector rodando em producao).
-EXPECTED_SOURCES = ("ticketsports", "ativo", "iguanasports", "yescom")
+EXPECTED_SOURCES = ("ticketsports", "runningland", "ativo", "iguanasports", "yescom")
 
 # Idade maxima da coleta mais recente por fonte antes de alertar.
 MAX_FETCH_AGE_HOURS = 48

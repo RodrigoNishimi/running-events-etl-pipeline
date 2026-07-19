@@ -70,6 +70,30 @@ def test_same_uf_different_cities_penalized():
     assert match(a, b).decision == Decision.DISTINCT
 
 
+def test_different_brands_same_city_day_never_merge():
+    """Caso real do falso merge de 2026-07-19: 'TECH RUN CURITIBA 2026' vs
+    'Eco Run - Curitiba 2026' — marcas diferentes, mesmo dia e cidade. Cidade
+    e ano no nome nao podem inflar a similaridade."""
+    a = _ev(1, "TECH RUN CURITIBA 2026",
+            start_at=datetime(2026, 8, 1), city="Curitiba", state="PR")
+    b = _ev(2, "Eco Run - Curitiba 2026",
+            start_at=datetime(2026, 8, 1), city="Curitiba", state="PR")
+    result = match(a, b)
+    assert result.decision == Decision.DISTINCT, result
+
+
+def test_same_event_with_city_in_one_name_still_merges():
+    """'Rio S21K - Rio de Janeiro - 2026' (fonte A) vs 'Rio S21K 2026' (fonte
+    B): mesmo evento; remover tokens da cidade nao pode impedir o merge."""
+    a = _ev(1, "Rio S21K - Rio de Janeiro - 2026",
+            start_at=datetime(2026, 8, 30), city="Rio de Janeiro", state="RJ",
+            distances_km=frozenset({21.0975}))
+    b = _ev(2, "Rio S21K 2026",
+            start_at=datetime(2026, 8, 30), city="Rio de Janeiro", state="RJ",
+            distances_km=frozenset({21.0975}))
+    assert match(a, b).decision == Decision.MERGE
+
+
 def test_unrelated_events_are_distinct():
     a = _ev(1, "Corrida do Pantanal", state="MS")
     b = _ev(2, "Night Run Sao Paulo", state="SP")
