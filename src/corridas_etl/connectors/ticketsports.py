@@ -195,12 +195,21 @@ def _parse_start_date(value: str | None) -> datetime | None:
 
 
 def _parse_city_state(location_name: str) -> tuple[str | None, str | None]:
-    """Extrai (cidade, UF) de 'Praca X: Praca X, Matinhos, PR, Brasil'."""
+    """Extrai (cidade, UF) de 'Praca X: Praca X, Matinhos, PR, Brasil'.
+
+    Defesas contra enderecos reais malformados (observados em 2026-07-19):
+      - numero de rua no lugar da cidade ('Av. X, 150, RJ') -> cidade None;
+      - nome do local grudado ('AABB - ARACAJU : Aracaju, SE') -> so o que
+        vem depois do ultimo ':'.
+    """
     parts = [p.strip() for p in location_name.split(",") if p.strip()]
     # Procura o padrao <cidade>, <UF> varrendo de tras pra frente ("Brasil" e opcional).
     for i in range(len(parts) - 1, 0, -1):
         if _UF_RE.match(parts[i]):
-            return parts[i - 1], parts[i]
+            city = parts[i - 1].split(":")[-1].strip()
+            if not city or city.isdigit():
+                return None, parts[i]
+            return city, parts[i]
     return None, None
 
 

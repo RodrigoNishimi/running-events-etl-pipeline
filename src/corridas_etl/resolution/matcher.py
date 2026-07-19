@@ -45,6 +45,22 @@ _MARKER_TOKENS = {"kids", "infantil", "caminhada", "walk", "virtual"}
 
 _YEAR_RE = re.compile(r"\b(20\d{2})\b")
 
+# Tokens de edicao que sao ruido para o matching de identidade: ordinais
+# ("35a", "10o"), anos soltos (o guard de anos ja cuida de edicoes) e numerais
+# romanos validos ("xxi"). NAO usar no canonical_key — so no score fuzzy.
+_ORDINAL_TOKEN_RE = re.compile(r"^\d{1,3}[ao]?$")
+_ROMAN_TOKEN_RE = re.compile(r"^m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$")
+
+
+def _match_name(name: str) -> str:
+    """Nome normalizado para o score fuzzy, sem marcadores de edicao."""
+    tokens = normalize_name(name).split()
+    kept = [
+        t for t in tokens
+        if not _ORDINAL_TOKEN_RE.match(t) and not (len(t) > 0 and _ROMAN_TOKEN_RE.fullmatch(t))
+    ]
+    return " ".join(kept) if kept else " ".join(tokens)
+
 
 class Decision(str, Enum):
     MERGE = "merge"
@@ -80,7 +96,7 @@ def match(a: EventForMatch, b: EventForMatch) -> MatchResult:
     features: dict[str, float | None] = {}
 
     # -- Nome (sempre disponivel) -----------------------------------------
-    name_a, name_b = normalize_name(a.name), normalize_name(b.name)
+    name_a, name_b = _match_name(a.name), _match_name(b.name)
     # token_set e generoso com subconjuntos ("brooks run the bridge" ⊇ "run the
     # bridge"); token_sort pune reordenacoes/insercoes. A media equilibra.
     name_score = (
@@ -111,7 +127,10 @@ def match(a: EventForMatch, b: EventForMatch) -> MatchResult:
         if a.state != b.state:
             # UFs conflitantes: quase certamente eventos distintos.
             return MatchResult(0.0, Decision.DISTINCT, {**features, "place": 0.0})
-        place_score = 1.0 if (a.city and b.city and _same_city(a.city, b.city)) else 0.5
+        if a.city and b.city:
+            place_score = 1.0 if _same_city(a.city, b.city) else 0.0
+        else:
+            place_score = 0.5  # so a UF bate; evidencia fraca
         features["place"] = place_score
         num += place_score * _W_PLACE
         den += _W_PLACE
@@ -126,6 +145,15 @@ def match(a: EventForMatch, b: EventForMatch) -> MatchResult:
         den += _W_DIST
 
     score = num / den if den else 0.0
+
+    # Cidades conhecidas e DIFERENTES: penalidade multiplicativa. Triagem real
+    # (2026-07-19, 39 pares) mostrou que "mesma UF, cidades distintas" e quase
+    # sempre outro evento, mesmo com data e distancias iguais ("Meia de Jundiai"
+    # vs "Meia de SBC"). Nao e DISTINCT absoluto porque cidades vizinhas podem
+    # nomear o mesmo evento ("Dez Milhas Garoto": Vitoria vs Vila Velha) — com
+    # nome quase identico o par ainda alcanca a fila de revisao.
+    if features.get("place") == 0.0:
+        score *= 0.85
 
     if score >= AUTO_MERGE_THRESHOLD and guard is None:
         decision = Decision.MERGE

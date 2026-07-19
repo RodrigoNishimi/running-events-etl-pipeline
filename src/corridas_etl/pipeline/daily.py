@@ -32,6 +32,9 @@ SOURCES = ("iguanasports", "yescom", "ticketsports")
 # Paginas renderizadas por execucao no enriquecimento de distancias.
 ENRICH_DISTANCES_PER_RUN = 25
 
+# Consultas novas ao Nominatim por execucao (cache faz o resto).
+GEOCODE_PER_RUN = 100
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pipeline diario completo")
@@ -45,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from ..db import connect
     from .dedup import run_dedup
-    from .enrich import enrich_iguana_dates, enrich_ticketsports_distances
+    from .enrich import enrich_geocode, enrich_iguana_dates, enrich_ticketsports_distances
     from .quality import run_quality
     from .run import run_source
 
@@ -78,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
                 enrich_ticketsports_distances(conn, ENRICH_DISTANCES_PER_RUN)
             except Exception:
                 log.exception("enriquecimento ticketsports-distances falhou")
+            try:
+                enrich_geocode(conn, GEOCODE_PER_RUN)
+            except Exception:
+                log.exception("enriquecimento geocode falhou")
 
     # -- 4. Quality ----------------------------------------------------------
     log.info("=== qualidade ===")

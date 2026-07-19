@@ -14,6 +14,12 @@ Passos:
       As distancias so vem no titulo (o conteudo completo e client-side).
       Para eventos sem nenhuma distancia, renderizamos a pagina publica do
       evento e extraimos "5km/10km/21km..." do texto visivel.
+
+  geocode
+      Resolve (cidade, UF) -> lat/long via Nominatim/OSM, com cache em tabela
+      (misses inclusive) e rate limit de 1 req/s conforme a politica de uso
+      deles. Preenche event.latitude/longitude no nivel de cidade — suficiente
+      para "corridas perto de mim"; endereco exato fica para depois.
 """
 
 from __future__ import annotations
@@ -191,10 +197,95 @@ def enrich_ticketsports_distances(conn: psycopg.Connection, limit: int | None) -
     return updated
 
 
+# -- Passo: geocode -----------------------------------------------------------
+
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_DELAY_S = 1.1  # politica do Nominatim: max 1 req/s
+
+
+def _nominatim_lookup(city: str, state: str) -> tuple[float, float] | None:
+    import httpx
+
+    from ..config import settings
+
+    resp = httpx.get(
+        NOMINATIM_URL,
+        params={
+            "city": city,
+            "state": state,
+            "country": "Brazil",
+            "format": "jsonv2",
+            "limit": 1,
+        },
+        headers={"User-Agent": settings.user_agent},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    results = resp.json()
+    if not results:
+        return None
+    return float(results[0]["lat"]), float(results[0]["lon"])
+
+
+def enrich_geocode(conn: psycopg.Connection, limit: int | None) -> int:
+    import time
+
+    pending = conn.execute(
+        """
+        SELECT DISTINCT e.city, e.state FROM event e
+        WHERE e.city IS NOT NULL AND e.state IS NOT NULL AND e.latitude IS NULL
+          AND NOT EXISTS (SELECT 1 FROM geocode_cache g
+                          WHERE g.city = e.city AND g.state = e.state)
+        ORDER BY e.city
+        """
+    ).fetchall()
+    if limit is not None:
+        pending = pending[:limit]
+
+    log.info("geocode: %d (cidade, UF) a consultar no Nominatim", len(pending))
+    for i, (city, state) in enumerate(pending):
+        if i > 0:
+            time.sleep(NOMINATIM_DELAY_S)
+        try:
+            coords = _nominatim_lookup(city, state)
+        except Exception as exc:
+            log.warning("  '%s/%s': erro no Nominatim (%s); tento na proxima", city, state, exc)
+            continue
+        lat, lng = coords if coords else (None, None)
+        conn.execute(
+            """
+            INSERT INTO geocode_cache (city, state, latitude, longitude)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (city, state) DO UPDATE SET
+                latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
+                resolved_at = now()
+            """,
+            (city, state, lat, lng),
+        )
+        # Commit por consulta: cada lookup custou 1.1s de rate limit; um crash
+        # no meio do lote nao pode jogar o cache fora.
+        conn.commit()
+        if coords is None:
+            log.info("  '%s/%s': sem resultado (miss cacheado)", city, state)
+
+    # Aplica o cache (novo e antigo) aos eventos sem coordenadas.
+    updated = conn.execute(
+        """
+        UPDATE event e SET latitude = g.latitude, longitude = g.longitude,
+                           updated_at = now()
+        FROM geocode_cache g
+        WHERE e.city = g.city AND e.state = g.state
+          AND e.latitude IS NULL AND g.latitude IS NOT NULL
+        """
+    ).rowcount
+    return updated
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Enriquecimento de eventos (Fase 1)")
     parser.add_argument(
-        "--step", required=True, choices=["iguana-dates", "ticketsports-distances"]
+        "--step", required=True,
+        choices=["iguana-dates", "ticketsports-distances", "geocode"],
     )
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args(argv)
@@ -204,6 +295,8 @@ def main(argv: list[str] | None = None) -> int:
     with connect() as conn:
         if args.step == "iguana-dates":
             n = enrich_iguana_dates(conn)
+        elif args.step == "geocode":
+            n = enrich_geocode(conn, args.limit)
         else:
             n = enrich_ticketsports_distances(conn, args.limit)
     log.info("%s: %d eventos enriquecidos", args.step, n)

@@ -58,6 +58,18 @@ def test_conflicting_states_are_distinct():
     assert match(a, b).decision == Decision.DISTINCT
 
 
+def test_same_uf_different_cities_penalized():
+    """Nomes genericos iguais em cidades diferentes da mesma UF nao devem nem
+    entrar na fila de revisao (licao da triagem real de 2026-07-19)."""
+    a = _ev(1, "1ª Meia Maratona de Jundiai",
+            start_at=datetime(2026, 8, 23), city="Jundiaí", state="SP",
+            distances_km=frozenset({21.0975}))
+    b = _ev(2, "22ª Meia Maratona de Sao Bernardo do Campo",
+            start_at=datetime(2026, 8, 23), city="São Bernardo do Campo", state="SP",
+            distances_km=frozenset({21.0975}))
+    assert match(a, b).decision == Decision.DISTINCT
+
+
 def test_unrelated_events_are_distinct():
     a = _ev(1, "Corrida do Pantanal", state="MS")
     b = _ev(2, "Night Run Sao Paulo", state="SP")

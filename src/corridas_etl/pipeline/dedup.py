@@ -84,8 +84,26 @@ def _completeness(conn: psycopg.Connection, event_id: int) -> int:
 
 def merge_events(conn: psycopg.Connection, survivor_id: int, absorbed_id: int) -> None:
     """Mescla `absorbed` em `survivor`: repointa fontes/distancias, completa
-    campos nulos do sobrevivente e apaga o absorvido."""
+    campos nulos do sobrevivente, registra o alias e apaga o absorvido.
+
+    O alias garante que a proxima carga da fonte do absorvido atualize o
+    sobrevivente em vez de recriar o evento (ver db.upsert_event)."""
     with conn.cursor() as cur:
+        # Aliases que apontavam para o absorvido migram para o sobrevivente,
+        # e a chave do absorvido vira alias tambem (antes do DELETE, senao o
+        # ON DELETE CASCADE os removeria).
+        cur.execute(
+            "UPDATE event_alias SET event_id = %s WHERE event_id = %s",
+            (survivor_id, absorbed_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO event_alias (canonical_key, event_id)
+            SELECT canonical_key, %s FROM event WHERE id = %s
+            ON CONFLICT (canonical_key) DO UPDATE SET event_id = EXCLUDED.event_id
+            """,
+            (survivor_id, absorbed_id),
+        )
         # Completa campos que o sobrevivente nao tem com os do absorvido.
         cur.execute(
             """

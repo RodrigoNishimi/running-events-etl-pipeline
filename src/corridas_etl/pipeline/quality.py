@@ -123,6 +123,15 @@ def check_anomalies(conn: psycopg.Connection, report: Report) -> None:
     if orphans:
         report.warn(f"{orphans} evento(s) sem nenhum source_record (orfaos de merge?)")
 
+    # Bounding box do Brasil incluindo ilhas oceanicas (Noronha ~-32.4,
+    # Trindade ~-29.3 de longitude). Fora disso = geocoding suspeito.
+    out_of_bounds = conn.execute(
+        """SELECT count(*) FROM event WHERE latitude IS NOT NULL
+           AND NOT (latitude BETWEEN -34 AND 6 AND longitude BETWEEN -74 AND -28)"""
+    ).fetchone()[0]
+    if out_of_bounds:
+        report.warn(f"{out_of_bounds} evento(s) geocodificados fora do Brasil")
+
 
 # -- Cobertura ----------------------------------------------------------------
 

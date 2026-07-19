@@ -71,6 +71,10 @@ def test_parse_city_state_variants():
     assert _parse_city_state("Praça X: Praça X, Matinhos, PR, Brasil") == ("Matinhos", "PR")
     assert _parse_city_state("Rio de Janeiro, RJ") == ("Rio de Janeiro", "RJ")
     assert _parse_city_state("Não informado") == (None, None)
+    # numero de rua no lugar da cidade -> so a UF (caso real de 2026-07-19)
+    assert _parse_city_state("Av. Brasil, 150, RJ, Brasil") == (None, "RJ")
+    # nome do local grudado com ':' -> fica so a cidade
+    assert _parse_city_state("AABB - ARACAJU : Aracaju, SE, Brasil") == ("Aracaju", "SE")
 
 
 def test_distances_from_title():
