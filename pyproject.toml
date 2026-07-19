@@ -25,6 +25,11 @@ dev = [
 browser = [
     "playwright>=1.44",
 ]
+# Indexacao no Meilisearch (camada de busca):
+#   pip install "corridas-etl[search]"
+search = [
+    "meilisearch>=0.31",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

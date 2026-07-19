@@ -13,6 +13,7 @@ import psycopg
 
 from .config import settings
 from .models import CanonicalEvent
+from .utils.text import slugify
 
 
 @contextmanager
@@ -54,6 +55,22 @@ def touch_source_records(
     ).rowcount
 
 
+def _upsert_organizer(conn: psycopg.Connection, name: str | None) -> int | None:
+    """Garante a organizadora na tabela `organizer` e retorna seu id."""
+    if not name or not name.strip():
+        return None
+    slug = slugify(name)
+    row = conn.execute(
+        """
+        INSERT INTO organizer (slug, name) VALUES (%s, %s)
+        ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+        """,
+        (slug, name.strip()),
+    ).fetchone()
+    return row[0]
+
+
 def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
     """Insere ou atualiza um evento canonico e retorna seu id.
 
@@ -66,10 +83,12 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
       - Campos anulaveis usam COALESCE: a fonte preenche lacunas mas nunca
         apaga dado ja existente (ex.: cidade/data vindas do enriquecimento).
     """
+    organizer_id = _upsert_organizer(conn, event.organizer_name)
     params = {
         "canonical_key": event.canonical_key,
         "slug": event.slug,
         "name": event.name,
+        "organizer_id": organizer_id,
         "description": event.description,
         "start_at": event.start_at,
         "registration_status": event.registration_status.value,
@@ -97,6 +116,7 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
                 """
                 UPDATE event SET
                     registration_status = %(registration_status)s,
+                    organizer_id = COALESCE(organizer_id, %(organizer_id)s),
                     description = COALESCE(description, %(description)s),
                     start_at    = COALESCE(start_at, %(start_at)s),
                     official_url= COALESCE(official_url, %(official_url)s),
@@ -116,17 +136,18 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
             cur.execute(
                 """
                 INSERT INTO event (
-                    canonical_key, slug, name, description,
+                    canonical_key, slug, name, description, organizer_id,
                     start_at, registration_status, official_url, image_url,
                     city, state, country, address, latitude, longitude, updated_at
                 ) VALUES (
-                    %(canonical_key)s, %(slug)s, %(name)s, %(description)s,
+                    %(canonical_key)s, %(slug)s, %(name)s, %(description)s, %(organizer_id)s,
                     %(start_at)s, %(registration_status)s, %(official_url)s, %(image_url)s,
                     %(city)s, %(state)s, %(country)s, %(address)s, %(latitude)s, %(longitude)s, now()
                 )
                 ON CONFLICT (canonical_key) DO UPDATE SET
                     name = EXCLUDED.name,
                     registration_status = EXCLUDED.registration_status,
+                    organizer_id = COALESCE(EXCLUDED.organizer_id, event.organizer_id),
                     description = COALESCE(EXCLUDED.description, event.description),
                     start_at    = COALESCE(EXCLUDED.start_at, event.start_at),
                     official_url= COALESCE(EXCLUDED.official_url, event.official_url),

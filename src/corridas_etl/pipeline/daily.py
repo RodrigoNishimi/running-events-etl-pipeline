@@ -9,9 +9,11 @@ Etapas (na ordem):
                    uma fonte quebrada nao derruba as demais (o erro vira
                    alerta no relatorio final e no exit code).
   2. DEDUP         entity resolution automatica + fila de revisao.
-  3. ENRICH        datas da Iguana e distancias do Ticket Sports (limitado
-                   por execucao p/ espalhar o custo de renderizacao).
-  4. QUALITY       relatorio de saude/anomalias/cobertura.
+  3. ENRICH        datas da Iguana, distancias do Ticket Sports e geocoding
+                   (limitados por execucao p/ espalhar o custo).
+  4. REINDEX       reconstroi o indice de busca (Meilisearch); tolerante a
+                   servidor ausente (--skip-index desliga).
+  5. QUALITY       relatorio de saude/anomalias/cobertura.
 
 Exit code 1 se alguma fonte falhou ou a qualidade acusou critico — bom para
 agendadores (Task Scheduler/cron/CI) sinalizarem o problema.
@@ -42,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="Max eventos por fonte (dev)")
     parser.add_argument("--full", action="store_true", help="Ignora o incremental por hash")
     parser.add_argument("--skip-enrich", action="store_true")
+    parser.add_argument("--skip-index", action="store_true", help="Nao reindexa no Meilisearch")
     parser.add_argument(
         "--sources", nargs="*", default=list(SOURCES),
         help=f"Fontes a rodar (default: {' '.join(SOURCES)})",
@@ -88,7 +91,22 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:
                 log.exception("enriquecimento geocode falhou")
 
-    # -- 4. Quality ----------------------------------------------------------
+    # -- 4. Reindex (Meilisearch) --------------------------------------------
+    if not args.skip_index:
+        log.info("=== reindex (busca) ===")
+        try:
+            from ..serving.search import fetch_documents, reindex
+
+            with connect() as conn:
+                docs = fetch_documents(conn, future_only=True)
+            reindex(docs)
+        except SystemExit as exc:
+            # Meilisearch/cliente ausente nao e fatal para o pipeline de dados.
+            log.warning("reindex pulado: %s", exc)
+        except Exception:
+            log.exception("reindex falhou (Meilisearch indisponivel?)")
+
+    # -- 5. Quality ----------------------------------------------------------
     log.info("=== qualidade ===")
     with connect() as conn:
         report = run_quality(conn)
