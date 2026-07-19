@@ -4,8 +4,9 @@ Roda o ciclo completo para uma fonte:
     discover -> fetch (Bronze/raw) -> parse (Silver) -> canonicalize (Gold) -> upsert
 
 Uso:
-    python -m corridas_etl.pipeline.run --source exemplo_ativo
-    python -m corridas_etl.pipeline.run --source exemplo_ativo --dry-run   # sem banco
+    python -m corridas_etl.pipeline.run --source ativo
+    python -m corridas_etl.pipeline.run --source ativo --dry-run   # sem banco
+    python -m corridas_etl.pipeline.run --source ticketsports --full # ignora incremental
 
 Na Fase 2 este entrypoint vira um "asset"/"flow" no orquestrador (Prefect/Dagster),
 mas a logica de negocio permanece a mesma.

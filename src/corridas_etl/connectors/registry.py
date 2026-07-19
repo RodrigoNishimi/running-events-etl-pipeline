@@ -6,19 +6,17 @@ Registre cada conector novo aqui.
 
 from __future__ import annotations
 
+from .ativo import AtivoConnector
 from .base import BaseConnector
-from .exemplo_ativo import ExemploAtivoConnector
 from .iguanasports import IguanaSportsConnector
 from .ticketsports import TicketSportsConnector
 from .yescom import YescomConnector
 
 _CONNECTORS: dict[str, type[BaseConnector]] = {
-    ExemploAtivoConnector.source: ExemploAtivoConnector,
     TicketSportsConnector.source: TicketSportsConnector,
+    AtivoConnector.source: AtivoConnector,
     IguanaSportsConnector.source: IguanaSportsConnector,
     YescomConnector.source: YescomConnector,
-    # Proximo (mapeado em 2026-07-19):
-    # - ativo: calendario JS-rendered; exige Playwright.
 }
 
 

@@ -26,8 +26,9 @@ import sys
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("corridas_etl.daily")
 
-# Fontes reais, na ordem de execucao (exemplo_ativo fica de fora).
-SOURCES = ("iguanasports", "yescom", "ticketsports")
+# Fontes reais, na ordem de execucao (rapidas primeiro; ticketsports por
+# ultimo por ser o mais lento — descoberta agentica).
+SOURCES = ("iguanasports", "yescom", "ativo", "ticketsports")
 
 # Paginas renderizadas por execucao no enriquecimento de distancias.
 ENRICH_DISTANCES_PER_RUN = 25

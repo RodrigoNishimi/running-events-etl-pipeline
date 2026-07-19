@@ -142,6 +142,15 @@ def merge_events(conn: psycopg.Connection, survivor_id: int, absorbed_id: int) -
 # -- Orquestracao -------------------------------------------------------------
 
 def run_dedup(conn: psycopg.Connection, *, dry_run: bool = False) -> tuple[int, int]:
+    if not dry_run:
+        # Auto-limpeza: pares que referenciam eventos ja removidos (ex.: purga
+        # de eventos passados) nao devem poluir a fila de revisao.
+        conn.execute(
+            """DELETE FROM dedup_review r
+               WHERE NOT EXISTS (SELECT 1 FROM event e WHERE e.id = r.event_id_a)
+                  OR NOT EXISTS (SELECT 1 FROM event e WHERE e.id = r.event_id_b)"""
+        )
+
     events = load_events(conn)
     log.info("%d eventos carregados para dedup", len(events))
 

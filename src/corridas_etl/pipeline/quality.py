@@ -25,23 +25,19 @@ from dataclasses import dataclass, field
 
 import psycopg
 
+from ..utils.geo import BR_UFS
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("corridas_etl.quality")
 
 # Fontes que DEVEM ter registros no banco (conector rodando em producao).
-EXPECTED_SOURCES = ("ticketsports", "iguanasports", "yescom")
+EXPECTED_SOURCES = ("ticketsports", "ativo", "iguanasports", "yescom")
 
 # Idade maxima da coleta mais recente por fonte antes de alertar.
 MAX_FETCH_AGE_HOURS = 48
 
 # Faixa plausivel p/ corrida de rua (km).
 DIST_MIN_KM, DIST_MAX_KM = 0.4, 120.0
-
-_UFS = {
-    "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
-    "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC",
-    "SP", "SE", "TO",
-}
 
 
 @dataclass
@@ -91,7 +87,7 @@ def check_source_health(conn: psycopg.Connection, report: Report) -> None:
 def check_anomalies(conn: psycopg.Connection, report: Report) -> None:
     bad_uf = conn.execute(
         "SELECT count(*) FROM event WHERE country = 'BR' AND state IS NOT NULL AND state <> ALL(%s)",
-        (list(_UFS),),
+        (list(BR_UFS),),
     ).fetchone()[0]
     if bad_uf:
         report.warn(f"{bad_uf} evento(s) brasileiro(s) com UF invalida")
