@@ -37,7 +37,7 @@ log = logging.getLogger("corridas_etl.dedup")
 def load_events(conn: psycopg.Connection) -> list[EventForMatch]:
     rows = conn.execute(
         """
-        SELECT e.id, e.name, e.start_at, e.city, e.state,
+        SELECT e.id, e.name, e.start_at, e.city, e.state, e.country,
                COALESCE(array_agg(d.distance_km) FILTER (WHERE d.distance_km IS NOT NULL), '{}')
         FROM event e
         LEFT JOIN event_distance d ON d.event_id = e.id
@@ -46,8 +46,8 @@ def load_events(conn: psycopg.Connection) -> list[EventForMatch]:
     ).fetchall()
     return [
         EventForMatch(
-            id=r[0], name=r[1], start_at=r[2], city=r[3], state=r[4],
-            distances_km=frozenset(float(km) for km in r[5]),
+            id=r[0], name=r[1], start_at=r[2], city=r[3], state=r[4], country=r[5],
+            distances_km=frozenset(float(km) for km in r[6]),
         )
         for r in rows
     ]

@@ -90,11 +90,17 @@ def check_source_health(conn: psycopg.Connection, report: Report) -> None:
 
 def check_anomalies(conn: psycopg.Connection, report: Report) -> None:
     bad_uf = conn.execute(
-        "SELECT count(*) FROM event WHERE state IS NOT NULL AND state <> ALL(%s)",
+        "SELECT count(*) FROM event WHERE country = 'BR' AND state IS NOT NULL AND state <> ALL(%s)",
         (list(_UFS),),
     ).fetchone()[0]
     if bad_uf:
-        report.warn(f"{bad_uf} evento(s) com UF invalida")
+        report.warn(f"{bad_uf} evento(s) brasileiro(s) com UF invalida")
+
+    br_without_uf = conn.execute(
+        "SELECT count(*) FROM event WHERE country = 'BR' AND city IS NOT NULL AND state IS NULL"
+    ).fetchone()[0]
+    if br_without_uf:
+        report.warn(f"{br_without_uf} evento(s) brasileiro(s) com cidade mas sem UF")
 
     past_open = conn.execute(
         """SELECT count(*) FROM event
@@ -124,13 +130,14 @@ def check_anomalies(conn: psycopg.Connection, report: Report) -> None:
         report.warn(f"{orphans} evento(s) sem nenhum source_record (orfaos de merge?)")
 
     # Bounding box do Brasil incluindo ilhas oceanicas (Noronha ~-32.4,
-    # Trindade ~-29.3 de longitude). Fora disso = geocoding suspeito.
+    # Trindade ~-29.3 de longitude). So aplica a eventos BR — internacionais
+    # legitimamente caem fora.
     out_of_bounds = conn.execute(
-        """SELECT count(*) FROM event WHERE latitude IS NOT NULL
+        """SELECT count(*) FROM event WHERE country = 'BR' AND latitude IS NOT NULL
            AND NOT (latitude BETWEEN -34 AND 6 AND longitude BETWEEN -74 AND -28)"""
     ).fetchone()[0]
     if out_of_bounds:
-        report.warn(f"{out_of_bounds} evento(s) geocodificados fora do Brasil")
+        report.warn(f"{out_of_bounds} evento(s) BR geocodificados fora do Brasil")
 
 
 # -- Cobertura ----------------------------------------------------------------

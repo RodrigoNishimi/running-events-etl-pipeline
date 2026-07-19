@@ -77,6 +77,7 @@ class EventForMatch:
     start_at: datetime | None = None
     city: str | None = None
     state: str | None = None
+    country: str = "BR"
     distances_km: frozenset[float] = frozenset()
 
 
@@ -89,6 +90,10 @@ class MatchResult:
 
 
 def match(a: EventForMatch, b: EventForMatch) -> MatchResult:
+    # Paises diferentes: eventos distintos, sem necessidade de pontuar.
+    if a.country != b.country:
+        return MatchResult(0.0, Decision.DISTINCT, {"country": 0.0})
+
     guard = _guard_reason(a, b)
 
     num = 0.0

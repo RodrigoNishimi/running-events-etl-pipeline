@@ -4,7 +4,7 @@ from datetime import datetime
 from corridas_etl.connectors.ticketsports import (
     TicketSportsConnector,
     _distances_from_title,
-    _parse_city_state,
+    _parse_location,
 )
 from corridas_etl.models import RawPayload, RegistrationStatus
 
@@ -67,14 +67,25 @@ def test_event_id_from_url():
     ) == "74246"
 
 
-def test_parse_city_state_variants():
-    assert _parse_city_state("Praça X: Praça X, Matinhos, PR, Brasil") == ("Matinhos", "PR")
-    assert _parse_city_state("Rio de Janeiro, RJ") == ("Rio de Janeiro", "RJ")
-    assert _parse_city_state("Não informado") == (None, None)
+def test_parse_location_brazil():
+    assert _parse_location("Praça X: Praça X, Matinhos, PR, Brasil") == ("Matinhos", "PR", "BR")
+    assert _parse_location("Rio de Janeiro, RJ") == ("Rio de Janeiro", "RJ", "BR")
+    assert _parse_location("Não informado") == (None, None, "BR")
     # numero de rua no lugar da cidade -> so a UF (caso real de 2026-07-19)
-    assert _parse_city_state("Av. Brasil, 150, RJ, Brasil") == (None, "RJ")
+    assert _parse_location("Av. Brasil, 150, RJ, Brasil") == (None, "RJ", "BR")
     # nome do local grudado com ':' -> fica so a cidade
-    assert _parse_city_state("AABB - ARACAJU : Aracaju, SE, Brasil") == ("Aracaju", "SE")
+    assert _parse_location("AABB - ARACAJU : Aracaju, SE, Brasil") == ("Aracaju", "SE", "BR")
+
+
+def test_parse_location_international():
+    # subdivisao estrangeira NAO vira UF; pais detectado (casos reais)
+    assert _parse_location(
+        "San Pedro de Atacama - Chile: Praça, AT, Chile"
+    ) == ("Praça", None, "CL")
+    assert _parse_location(
+        "Punta del Este: Punta del Este, 100, Punta del Este, MA, Uruguai"
+    ) == ("Punta del Este", None, "UY")
+    assert _parse_location("Porto: 100, Porto, 13, Portugal") == ("Porto", None, "PT")
 
 
 def test_distances_from_title():

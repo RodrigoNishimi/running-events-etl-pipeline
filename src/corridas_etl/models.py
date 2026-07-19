@@ -72,7 +72,8 @@ class SourceEventRecord(BaseModel):
     image_url: str | None = None
 
     city: str | None = None
-    state: str | None = None         # UF (2 letras)
+    state: str | None = None         # UF (2 letras) — só significativa quando country == "BR"
+    country: str = "BR"              # ISO-3166 alpha-2 (BR, CL, UY, PT, ...)
     address: str | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -83,6 +84,11 @@ class SourceEventRecord(BaseModel):
     @classmethod
     def _uppercase_uf(cls, v: str | None) -> str | None:
         return v.upper()[:2] if v else v
+
+    @field_validator("country")
+    @classmethod
+    def _uppercase_country(cls, v: str) -> str:
+        return v.upper()[:2] if v else "BR"
 
     def blocking_key(self) -> str:
         """Chave barata p/ agrupar candidatos a duplicata (blocking).
@@ -110,6 +116,7 @@ class CanonicalEvent(BaseModel):
 
     city: str | None = None
     state: str | None = None
+    country: str = "BR"
     address: str | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -137,6 +144,7 @@ class CanonicalEvent(BaseModel):
             image_url=rec.image_url,
             city=rec.city,
             state=rec.state,
+            country=rec.country,
             address=rec.address,
             latitude=rec.latitude,
             longitude=rec.longitude,
@@ -154,4 +162,8 @@ def _build_canonical_key(rec: SourceEventRecord) -> str:
     """
     ymd = rec.start_at.strftime("%Y-%m-%d") if rec.start_at else "sem-data"
     basis = f"{normalize_name(rec.name)}|{ymd}|{(rec.city or '').lower()}|{rec.state or ''}"
+    # País entra na chave só quando != BR, para não alterar as chaves já
+    # gravadas dos eventos brasileiros (retrocompatibilidade do upsert).
+    if rec.country and rec.country != "BR":
+        basis += f"|{rec.country}"
     return hashlib.sha1(basis.encode("utf-8")).hexdigest()

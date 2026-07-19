@@ -136,7 +136,7 @@ class TicketSportsConnector(BaseConnector):
             return None
 
         location_name = (ld.get("location") or {}).get("name") or ""
-        city, state = _parse_city_state(location_name)
+        city, state, country = _parse_location(location_name)
 
         offers = ld.get("offers") or {}
         status = _STATUS_MAP.get(offers.get("availability"), RegistrationStatus.UNKNOWN)
@@ -158,6 +158,7 @@ class TicketSportsConnector(BaseConnector):
             image_url=images[0] if images else None,
             city=city,
             state=state,
+            country=country,
             address=location_name or None,
             distances=_distances_from_title(name),
         )
@@ -194,23 +195,68 @@ def _parse_start_date(value: str | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=TZ_BRT)
 
 
-def _parse_city_state(location_name: str) -> tuple[str | None, str | None]:
-    """Extrai (cidade, UF) de 'Praca X: Praca X, Matinhos, PR, Brasil'.
+# Nome de pais por extenso (como o Ticket Sports escreve) -> ISO-3166 alpha-2.
+_COUNTRY_NAMES = {
+    "brasil": "BR", "brazil": "BR",
+    "chile": "CL", "uruguai": "UY", "uruguay": "UY", "argentina": "AR",
+    "paraguai": "PY", "paraguay": "PY", "portugal": "PT", "espanha": "ES",
+    "estados unidos": "US", "eua": "US", "usa": "US",
+}
 
-    Defesas contra enderecos reais malformados (observados em 2026-07-19):
-      - numero de rua no lugar da cidade ('Av. X, 150, RJ') -> cidade None;
-      - nome do local grudado ('AABB - ARACAJU : Aracaju, SE') -> so o que
-        vem depois do ultimo ':'.
+
+def _parse_location(location_name: str) -> tuple[str | None, str | None, str]:
+    """Extrai (cidade, UF, pais ISO-2) de um endereco do Ticket Sports.
+
+    Formatos reais (2026-07-19):
+      'Praca X: Praca X, Matinhos, PR, Brasil'                  -> (Matinhos, PR, BR)
+      'Punta del Este: ..., Punta del Este, MA, Uruguai'        -> (Punta del Este, None, UY)
+      'Porto: 100, Porto, 13, Portugal'                         -> (Porto, None, PT)
+
+    Regras: o ultimo segmento costuma ser o pais; a UF/subdivisao vem antes.
+    Para paises != BR a subdivisao estrangeira ('MA', '13') NAO e uma UF valida,
+    entao state fica None. Defesas contra lixo (numero de rua, prefixo 'Local:').
     """
     parts = [p.strip() for p in location_name.split(",") if p.strip()]
-    # Procura o padrao <cidade>, <UF> varrendo de tras pra frente ("Brasil" e opcional).
+    if not parts:
+        return None, None, "BR"
+
+    # Pais: ultimo segmento, se for um nome de pais conhecido.
+    country = "BR"
+    if parts[-1].lower() in _COUNTRY_NAMES:
+        country = _COUNTRY_NAMES[parts[-1].lower()]
+        parts = parts[:-1]
+
+    # Procura o token de subdivisao (2 letras) varrendo de tras pra frente.
     for i in range(len(parts) - 1, 0, -1):
         if _UF_RE.match(parts[i]):
             city = parts[i - 1].split(":")[-1].strip()
             if not city or city.isdigit():
-                return None, parts[i]
-            return city, parts[i]
-    return None, None
+                city = None
+            # Subdivisao so vale como UF em eventos brasileiros.
+            state = parts[i] if country == "BR" else None
+            return city, state, country
+
+    # Sem token de UF (comum em internacional apos remover o pais): a cidade
+    # costuma ser o segmento nao-numerico que mais se repete no endereco
+    # ('Porto: 100, Porto, 13' -> Porto; 'Punta del Este, 100, Punta del Este').
+    if country != "BR":
+        return _modal_city(parts), None, country
+    return None, None, country
+
+
+def _modal_city(parts: list[str]) -> str | None:
+    from collections import Counter
+
+    candidates: list[str] = []
+    for part in parts:
+        for chunk in part.split(":"):
+            chunk = chunk.strip()
+            # descarta numeros de rua e tokens curtos de subdivisao
+            if chunk and not chunk.isdigit() and not _UF_RE.match(chunk):
+                candidates.append(chunk)
+    if not candidates:
+        return None
+    return Counter(candidates).most_common(1)[0][0]
 
 
 def _distances_from_title(title: str) -> list[Distance]:

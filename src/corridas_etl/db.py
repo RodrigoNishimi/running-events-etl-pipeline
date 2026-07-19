@@ -51,6 +51,7 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
         "image_url": event.image_url,
         "city": event.city,
         "state": event.state,
+        "country": event.country,
         "address": event.address,
         "latitude": event.latitude,
         "longitude": event.longitude,
@@ -76,6 +77,7 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
                     image_url   = COALESCE(image_url, %(image_url)s),
                     city        = COALESCE(city, %(city)s),
                     state       = COALESCE(state, %(state)s),
+                    country     = %(country)s,
                     address     = COALESCE(address, %(address)s),
                     latitude    = COALESCE(latitude, %(latitude)s),
                     longitude   = COALESCE(longitude, %(longitude)s),
@@ -90,11 +92,11 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
                 INSERT INTO event (
                     canonical_key, slug, name, description,
                     start_at, registration_status, official_url, image_url,
-                    city, state, address, latitude, longitude, updated_at
+                    city, state, country, address, latitude, longitude, updated_at
                 ) VALUES (
                     %(canonical_key)s, %(slug)s, %(name)s, %(description)s,
                     %(start_at)s, %(registration_status)s, %(official_url)s, %(image_url)s,
-                    %(city)s, %(state)s, %(address)s, %(latitude)s, %(longitude)s, now()
+                    %(city)s, %(state)s, %(country)s, %(address)s, %(latitude)s, %(longitude)s, now()
                 )
                 ON CONFLICT (canonical_key) DO UPDATE SET
                     name = EXCLUDED.name,
@@ -105,6 +107,7 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
                     image_url   = COALESCE(EXCLUDED.image_url, event.image_url),
                     city        = COALESCE(EXCLUDED.city, event.city),
                     state       = COALESCE(EXCLUDED.state, event.state),
+                    country     = EXCLUDED.country,
                     address     = COALESCE(EXCLUDED.address, event.address),
                     latitude    = COALESCE(EXCLUDED.latitude, event.latitude),
                     longitude   = COALESCE(EXCLUDED.longitude, event.longitude),
