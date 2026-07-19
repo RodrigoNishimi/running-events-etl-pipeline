@@ -19,7 +19,7 @@ import logging
 import sys
 
 from ..connectors.registry import available_sources, get_connector
-from ..models import CanonicalEvent
+from ..models import CanonicalEvent, RegistrationStatus
 from ..storage.raw import RawStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -77,6 +77,12 @@ def run_source(
     finally:
         connector.close()
 
+    # Consolida registros que caem na MESMA chave canonica nesta rodada (ex.:
+    # produtos "regular" e "idosos/estudantes" do mesmo evento na Iguana). Sem
+    # isso, cada um faria um upsert e o preco/status "piscaria" entre eles a
+    # cada execucao, gerando mudancas espurias no outbox.
+    canonical = _consolidate(canonical)
+
     log.info(
         "[%s] %d novos/alterados, %d inalterados (pulados)",
         source, len(canonical), len(unchanged_ids),
@@ -97,6 +103,47 @@ def run_source(
         touched = touch_source_records(conn, source, unchanged_ids)
     log.info("[%s] %d gravados, %d inalterados renovados", source, len(canonical), touched)
     return len(canonical)
+
+
+# Prioridade de status quando registros do mesmo evento discordam (maior vence).
+_STATUS_RANK = {
+    RegistrationStatus.OPEN: 4,
+    RegistrationStatus.COMING_SOON: 3,
+    RegistrationStatus.SOLD_OUT: 2,
+    RegistrationStatus.CLOSED: 1,
+    RegistrationStatus.UNKNOWN: 0,
+}
+
+
+def _consolidate(events: list[CanonicalEvent]) -> list[CanonicalEvent]:
+    """Funde CanonicalEvents com a mesma canonical_key (dentro de uma rodada).
+
+    Preco = menor conhecido; status = de maior prioridade; distancias = uniao;
+    demais campos = primeiro nao-nulo. Fontes acumuladas.
+    """
+    by_key: dict[str, CanonicalEvent] = {}
+    for ev in events:
+        base = by_key.get(ev.canonical_key)
+        if base is None:
+            by_key[ev.canonical_key] = ev.model_copy(deep=True)
+            continue
+        base.price = _min_opt(base.price, ev.price)
+        if _STATUS_RANK[ev.registration_status] > _STATUS_RANK[base.registration_status]:
+            base.registration_status = ev.registration_status
+        seen = {d.distance_km for d in base.distances}
+        base.distances.extend(d for d in ev.distances if d.distance_km not in seen)
+        base.sources.extend(ev.sources)
+        for field in ("description", "start_at", "official_url", "image_url",
+                      "city", "state", "address", "latitude", "longitude",
+                      "organizer_name"):
+            if getattr(base, field) is None and getattr(ev, field) is not None:
+                setattr(base, field, getattr(ev, field))
+    return list(by_key.values())
+
+
+def _min_opt(a: float | None, b: float | None) -> float | None:
+    vals = [x for x in (a, b) if x is not None]
+    return min(vals) if vals else None
 
 
 def main(argv: list[str] | None = None) -> int:

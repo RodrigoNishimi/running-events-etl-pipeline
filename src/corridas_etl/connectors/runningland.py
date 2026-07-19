@@ -188,6 +188,7 @@ class RunningLandConnector(BaseConnector):
             organizer_name="Running Land",
             start_at=_parse_date(item.get("event_date")),
             registration_status=status,
+            price=_min_price(item),
             official_url=payload.source_url,
             image_url=thumb,
             city=resolved.get("city") or None,
@@ -214,6 +215,18 @@ class RunningLandConnector(BaseConnector):
             if resolved:
                 out.append(resolved)
         return out
+
+
+def _min_price(item: dict) -> float | None:
+    """Menor preço: special_price (promoção) se houver, senão o regular."""
+    regular = (
+        ((item.get("price_range") or {}).get("minimum_price") or {})
+        .get("regular_price") or {}
+    ).get("value")
+    special = item.get("special_price")
+    # preço 0 é placeholder ("ainda sem valor"), não gratuito -> desconhecido
+    candidates = [p for p in (regular, special) if isinstance(p, (int, float)) and p > 0]
+    return round(min(candidates), 2) if candidates else None
 
 
 def _urlquote(text: str) -> str:

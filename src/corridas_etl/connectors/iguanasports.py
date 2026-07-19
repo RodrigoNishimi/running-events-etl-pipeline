@@ -75,6 +75,7 @@ class IguanaSportsConnector(BaseConnector):
             description=_strip_html(product.get("description")) or None,
             organizer_name="Iguana Sports",
             registration_status=status,
+            price=_min_price(product),
             official_url=payload.source_url,
             image_url=_image_url(product),
             distances=_distances_from_options(product.get("options") or []),
@@ -88,6 +89,22 @@ def _distances_from_options(options: list[dict]) -> list[Distance]:
         if "dist" in opt_name:
             return [Distance.from_label(v) for v in opt.get("values", [])]
     return []
+
+
+def _min_price(product: dict) -> float | None:
+    """Menor preço entre as variantes DISPONÍVEIS (`.js` traz price em centavos)."""
+    prices = [
+        v["price"] / 100.0
+        for v in product.get("variants", [])
+        if v.get("available") and isinstance(v.get("price"), (int, float)) and v["price"] > 0
+    ]
+    if not prices:  # esgotado: usa o menor preço geral como referência
+        prices = [
+            v["price"] / 100.0
+            for v in product.get("variants", [])
+            if isinstance(v.get("price"), (int, float)) and v["price"] > 0
+        ]
+    return round(min(prices), 2) if prices else None
 
 
 def _image_url(product: dict) -> str | None:

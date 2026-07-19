@@ -13,7 +13,9 @@ Etapas (na ordem):
                    (limitados por execucao p/ espalhar o custo).
   4. REINDEX       reconstroi o indice de busca (Meilisearch); tolerante a
                    servidor ausente (--skip-index desliga).
-  5. QUALITY       relatorio de saude/anomalias/cobertura.
+  5. NOTIFY        reporta o feed de mudancas de preco/status (o trigger ja
+                   registrou; o app consome via pipeline.notify).
+  6. QUALITY       relatorio de saude/anomalias/cobertura.
 
 Exit code 1 se alguma fonte falhou ou a qualidade acusou critico — bom para
 agendadores (Task Scheduler/cron/CI) sinalizarem o problema.
@@ -30,7 +32,7 @@ log = logging.getLogger("corridas_etl.daily")
 
 # Fontes reais, na ordem de execucao (rapidas primeiro; ticketsports por
 # ultimo por ser o mais lento — descoberta agentica).
-SOURCES = ("iguanasports", "yescom", "ativo", "ticketsports")
+SOURCES = ("iguanasports", "runningland", "yescom", "ativo", "ticketsports")
 
 # Paginas renderizadas por execucao no enriquecimento de distancias.
 ENRICH_DISTANCES_PER_RUN = 25
@@ -106,7 +108,18 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             log.exception("reindex falhou (Meilisearch indisponivel?)")
 
-    # -- 5. Quality ----------------------------------------------------------
+    # -- 5. Notificações -----------------------------------------------------
+    # O trigger já registrou as mudanças de preço/status durante os upserts;
+    # aqui só reportamos o tamanho do feed pendente (o serviço de notificação
+    # do app consome via `python -m corridas_etl.pipeline.notify --json`).
+    log.info("=== feed de mudanças ===")
+    with connect() as conn:
+        from .notify import build_feed
+
+        pending = build_feed(conn, only_pending=True)
+    log.info("%d mudança(s) de preço/status no feed pendente", len(pending))
+
+    # -- 6. Quality ----------------------------------------------------------
     log.info("=== qualidade ===")
     with connect() as conn:
         report = run_quality(conn)

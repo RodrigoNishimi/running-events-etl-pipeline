@@ -68,6 +68,7 @@ class SourceEventRecord(BaseModel):
 
     start_at: datetime | None = None
     registration_status: RegistrationStatus = RegistrationStatus.UNKNOWN
+    price: float | None = None       # menor preço de inscrição (BRL), se conhecido
     official_url: str | None = None
     image_url: str | None = None
 
@@ -111,6 +112,7 @@ class CanonicalEvent(BaseModel):
 
     start_at: datetime | None = None
     registration_status: RegistrationStatus = RegistrationStatus.UNKNOWN
+    price: float | None = None
     official_url: str | None = None
     image_url: str | None = None
 
@@ -140,6 +142,7 @@ class CanonicalEvent(BaseModel):
             organizer_name=rec.organizer_name,
             start_at=rec.start_at,
             registration_status=rec.registration_status,
+            price=rec.price,
             official_url=rec.official_url,
             image_url=rec.image_url,
             city=rec.city,

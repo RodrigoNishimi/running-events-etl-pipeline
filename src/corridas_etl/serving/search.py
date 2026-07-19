@@ -32,9 +32,10 @@ INDEX_SETTINGS: dict = {
     "searchableAttributes": ["name", "city", "organizer_name", "state"],
     "filterableAttributes": [
         "state", "city", "country", "distances_km",
-        "month", "month_name", "year", "registration_status", "sources", "_geo",
+        "month", "month_name", "year", "registration_status", "sources",
+        "price", "has_price", "_geo",
     ],
-    "sortableAttributes": ["start_timestamp", "_geo"],
+    "sortableAttributes": ["start_timestamp", "price", "_geo"],
     # Ranking: eventos mais proximos no tempo primeiro (empate do textual).
     "rankingRules": [
         "words", "typo", "proximity", "attribute", "sort", "exactness",
@@ -46,7 +47,7 @@ INDEX_SETTINGS: dict = {
 _SELECT = """
     SELECT e.id, e.slug, e.name, e.description, e.start_at,
            e.registration_status, e.official_url, e.image_url,
-           e.city, e.state, e.country, e.latitude, e.longitude,
+           e.city, e.state, e.country, e.latitude, e.longitude, e.price,
            o.name AS organizer_name,
            COALESCE(array_agg(DISTINCT d.distance_km)
                     FILTER (WHERE d.distance_km IS NOT NULL), ARRAY[]::numeric[]) AS dists,
@@ -73,6 +74,8 @@ def build_document(row: dict) -> dict:
     """
     start_at: datetime | None = row.get("start_at")
     distances = sorted({float(km) for km in (row.get("dists") or [])})
+    price = row.get("price")
+    price = float(price) if price is not None else None
 
     doc: dict = {
         "id": row["id"],
@@ -84,6 +87,8 @@ def build_document(row: dict) -> dict:
         "country": row.get("country") or "BR",
         "organizer_name": row.get("organizer_name"),
         "registration_status": row.get("registration_status"),
+        "price": price,
+        "has_price": price is not None,   # facet p/ "só eventos com preço"
         "official_url": row.get("official_url"),
         "image_url": row.get("image_url"),
         "distances_km": distances,

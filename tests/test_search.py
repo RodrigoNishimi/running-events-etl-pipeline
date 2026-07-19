@@ -10,7 +10,7 @@ def _row(**kw) -> dict:
         "registration_status": "open", "official_url": "http://x", "image_url": None,
         "city": "São Paulo", "state": "SP", "country": "BR",
         "latitude": None, "longitude": None, "organizer_name": "Org",
-        "dists": [10.0, 5.0, 5.0], "sources": ["ticketsports", "ativo"],
+        "dists": [10.0, 5.0, 5.0], "sources": ["ticketsports", "ativo"], "price": 199.90,
     }
     base.update(kw)
     return base
@@ -26,6 +26,16 @@ def test_build_document_basic():
     assert doc["start_timestamp"] == int(_row()["start_at"].timestamp())
     assert set(doc["sources"]) == {"ticketsports", "ativo"}
     assert "_geo" not in doc                               # sem coordenadas
+
+
+def test_price_indexed():
+    doc = build_document(_row())
+    assert doc["price"] == 199.90 and doc["has_price"] is True
+
+
+def test_missing_price_flagged():
+    doc = build_document(_row(price=None))
+    assert doc["price"] is None and doc["has_price"] is False
 
 
 def test_geo_included_when_coordinates_present():

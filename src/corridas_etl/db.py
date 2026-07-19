@@ -92,6 +92,7 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
         "description": event.description,
         "start_at": event.start_at,
         "registration_status": event.registration_status.value,
+        "price": event.price,
         "official_url": event.official_url,
         "image_url": event.image_url,
         "city": event.city,
@@ -115,7 +116,8 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
             cur.execute(
                 """
                 UPDATE event SET
-                    registration_status = %(registration_status)s,
+                    registration_status = CASE WHEN %(registration_status)s = 'unknown'
+                        THEN registration_status ELSE %(registration_status)s END,
                     organizer_id = COALESCE(organizer_id, %(organizer_id)s),
                     description = COALESCE(description, %(description)s),
                     start_at    = COALESCE(start_at, %(start_at)s),
@@ -137,16 +139,17 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
                 """
                 INSERT INTO event (
                     canonical_key, slug, name, description, organizer_id,
-                    start_at, registration_status, official_url, image_url,
+                    start_at, registration_status, price, official_url, image_url,
                     city, state, country, address, latitude, longitude, updated_at
                 ) VALUES (
                     %(canonical_key)s, %(slug)s, %(name)s, %(description)s, %(organizer_id)s,
-                    %(start_at)s, %(registration_status)s, %(official_url)s, %(image_url)s,
+                    %(start_at)s, %(registration_status)s, %(price)s, %(official_url)s, %(image_url)s,
                     %(city)s, %(state)s, %(country)s, %(address)s, %(latitude)s, %(longitude)s, now()
                 )
                 ON CONFLICT (canonical_key) DO UPDATE SET
                     name = EXCLUDED.name,
-                    registration_status = EXCLUDED.registration_status,
+                    registration_status = CASE WHEN EXCLUDED.registration_status = 'unknown'
+                        THEN event.registration_status ELSE EXCLUDED.registration_status END,
                     organizer_id = COALESCE(EXCLUDED.organizer_id, event.organizer_id),
                     description = COALESCE(EXCLUDED.description, event.description),
                     start_at    = COALESCE(EXCLUDED.start_at, event.start_at),
@@ -180,15 +183,28 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
             cur.execute(
                 """
                 INSERT INTO source_record (
-                    event_id, source, source_event_id, source_url, raw_hash, last_seen_at
-                ) VALUES (%s, %s, %s, %s, %s, now())
+                    event_id, source, source_event_id, source_url, raw_hash, price, last_seen_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, now())
                 ON CONFLICT (source, source_event_id) DO UPDATE SET
                     event_id = EXCLUDED.event_id,
                     source_url = EXCLUDED.source_url,
                     raw_hash = EXCLUDED.raw_hash,
+                    price = EXCLUDED.price,
                     last_seen_at = now()
                 """,
-                (event_id, src.source, src.source_event_id, src.source_url, src.raw_hash),
+                (event_id, src.source, src.source_event_id, src.source_url, src.raw_hash, src.price),
             )
+
+        # Preco do evento = MENOR entre suas fontes (deterministico -> estavel;
+        # o trigger so registra mudanca quando esse minimo realmente muda). So
+        # atualiza se diferiu, para nao gerar UPDATE/trigger a toa.
+        cur.execute(
+            """
+            UPDATE event e SET price = sub.min_price
+            FROM (SELECT min(price) AS min_price FROM source_record WHERE event_id = %s) sub
+            WHERE e.id = %s AND e.price IS DISTINCT FROM sub.min_price
+            """,
+            (event_id, event_id),
+        )
 
     return event_id
