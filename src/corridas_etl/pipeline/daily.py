@@ -39,6 +39,7 @@ GEOCODE_PER_RUN = 100
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pipeline diario completo")
     parser.add_argument("--limit", type=int, default=None, help="Max eventos por fonte (dev)")
+    parser.add_argument("--full", action="store_true", help="Ignora o incremental por hash")
     parser.add_argument("--skip-enrich", action="store_true")
     parser.add_argument(
         "--sources", nargs="*", default=list(SOURCES),
@@ -58,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     for source in args.sources:
         log.info("=== fonte: %s ===", source)
         try:
-            run_source(source, limit=args.limit)
+            run_source(source, limit=args.limit, full=args.full)
         except Exception:
             # Isolamento: registra e segue para a proxima fonte.
             log.exception("fonte '%s' FALHOU", source)

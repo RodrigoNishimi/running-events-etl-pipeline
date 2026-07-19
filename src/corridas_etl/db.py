@@ -28,6 +28,32 @@ def connect() -> Iterator[psycopg.Connection]:
         conn.close()
 
 
+def load_source_hashes(conn: psycopg.Connection, source: str) -> dict[str, str]:
+    """{source_event_id: raw_hash} da ultima coleta — base do incremental."""
+    rows = conn.execute(
+        "SELECT source_event_id, raw_hash FROM source_record WHERE source = %s",
+        (source,),
+    ).fetchall()
+    return {r[0]: r[1] for r in rows if r[1]}
+
+
+def touch_source_records(
+    conn: psycopg.Connection, source: str, source_event_ids: list[str]
+) -> int:
+    """Renova last_seen_at dos registros inalterados (sem reprocessar).
+
+    Assim a checagem de saude por fonte nao acusa 'coleta velha' so porque o
+    conteudo nao mudou — nos VIMOS o evento nesta execucao.
+    """
+    if not source_event_ids:
+        return 0
+    return conn.execute(
+        """UPDATE source_record SET last_seen_at = now()
+           WHERE source = %s AND source_event_id = ANY(%s)""",
+        (source, source_event_ids),
+    ).rowcount
+
+
 def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
     """Insere ou atualiza um evento canonico e retorna seu id.
 
