@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: corridas
+      POSTGRES_PASSWORD: corridas
+      POSTGRES_DB: corridas
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U corridas"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Habilitado na Fase 1 (busca facetada). Descomente quando for usar.
+  # search:
+  #   image: getmeili/meilisearch:v1.8
+  #   environment:
+  #     MEILI_MASTER_KEY: dev_master_key
+  #   ports:
+  #     - "7700:7700"
+  #   volumes:
+  #     - meilidata:/meili_data
+
+volumes:
+  pgdata:
+  # meilidata:
