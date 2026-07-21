@@ -17,8 +17,6 @@ class Settings:
     raw_storage_dir: Path
     user_agent: str
     request_delay_seconds: float
-    meili_url: str
-    meili_master_key: str | None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -32,8 +30,6 @@ class Settings:
                 "ETL_USER_AGENT", "CorridasBot/0.1 (+https://example.com/bot)"
             ),
             request_delay_seconds=float(os.environ.get("ETL_REQUEST_DELAY_SECONDS", "2.0")),
-            meili_url=os.environ.get("MEILI_URL", "http://localhost:7700"),
-            meili_master_key=os.environ.get("MEILI_MASTER_KEY") or None,
         )
 
 

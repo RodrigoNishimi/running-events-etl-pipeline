@@ -11,11 +11,12 @@ Etapas (na ordem):
   2. DEDUP         entity resolution automatica + fila de revisao.
   3. ENRICH        datas da Iguana, distancias do Ticket Sports e geocoding
                    (limitados por execucao p/ espalhar o custo).
-  4. REINDEX       reconstroi o indice de busca (Meilisearch); tolerante a
-                   servidor ausente (--skip-index desliga).
-  5. NOTIFY        reporta o feed de mudancas de preco/status (o trigger ja
+  4. NOTIFY        reporta o feed de mudancas de preco/status (o trigger ja
                    registrou; o app consome via pipeline.notify).
-  6. QUALITY       relatorio de saude/anomalias/cobertura.
+  5. QUALITY       relatorio de saude/anomalias/cobertura.
+
+A busca do app roda direto no Postgres (pg_trgm/PostGIS, ver sql/008_search.sql)
+— nao ha mais etapa de reindexacao: o dado gravado aqui ja e pesquisavel.
 
 Exit code 1 se alguma fonte falhou ou a qualidade acusou critico — bom para
 agendadores (Task Scheduler/cron/CI) sinalizarem o problema.
@@ -46,7 +47,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="Max eventos por fonte (dev)")
     parser.add_argument("--full", action="store_true", help="Ignora o incremental por hash")
     parser.add_argument("--skip-enrich", action="store_true")
-    parser.add_argument("--skip-index", action="store_true", help="Nao reindexa no Meilisearch")
     parser.add_argument(
         "--sources", nargs="*", default=list(SOURCES),
         help=f"Fontes a rodar (default: {' '.join(SOURCES)})",
@@ -93,22 +93,7 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:
                 log.exception("enriquecimento geocode falhou")
 
-    # -- 4. Reindex (Meilisearch) --------------------------------------------
-    if not args.skip_index:
-        log.info("=== reindex (busca) ===")
-        try:
-            from ..serving.search import fetch_documents, reindex
-
-            with connect() as conn:
-                docs = fetch_documents(conn, future_only=True)
-            reindex(docs)
-        except SystemExit as exc:
-            # Meilisearch/cliente ausente nao e fatal para o pipeline de dados.
-            log.warning("reindex pulado: %s", exc)
-        except Exception:
-            log.exception("reindex falhou (Meilisearch indisponivel?)")
-
-    # -- 5. Notificações -----------------------------------------------------
+    # -- 4. Notificações -----------------------------------------------------
     # O trigger já registrou as mudanças de preço/status durante os upserts;
     # aqui só reportamos o tamanho do feed pendente (o serviço de notificação
     # do app consome via `python -m corridas_etl.pipeline.notify --json`).
@@ -119,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         pending = build_feed(conn, only_pending=True)
     log.info("%d mudança(s) de preço/status no feed pendente", len(pending))
 
-    # -- 6. Quality ----------------------------------------------------------
+    # -- 5. Quality ----------------------------------------------------------
     log.info("=== qualidade ===")
     with connect() as conn:
         report = run_quality(conn)

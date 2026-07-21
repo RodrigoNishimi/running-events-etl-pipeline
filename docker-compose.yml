@@ -15,18 +15,5 @@ services:
       timeout: 5s
       retries: 10
 
-  # Busca facetada. Suba com: docker compose up -d search
-  # Depois reindexe: python -m corridas_etl.serving.search
-  search:
-    image: getmeili/meilisearch:v1.8
-    environment:
-      MEILI_MASTER_KEY: dev_master_key
-      MEILI_ENV: development
-    ports:
-      - "7700:7700"
-    volumes:
-      - meilidata:/meili_data
-
 volumes:
   pgdata:
-  meilidata:
