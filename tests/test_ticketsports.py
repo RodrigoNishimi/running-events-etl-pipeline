@@ -4,6 +4,8 @@ from datetime import datetime
 from corridas_etl.connectors.ticketsports import (
     TicketSportsConnector,
     _distances_from_title,
+    _first_image,
+    _first_offer,
     _parse_location,
 )
 from corridas_etl.models import RawPayload, RegistrationStatus
@@ -86,6 +88,37 @@ def test_parse_location_international():
         "Punta del Este: Punta del Este, 100, Punta del Este, MA, Uruguai"
     ) == ("Punta del Este", None, "UY")
     assert _parse_location("Porto: 100, Porto, 13, Portugal") == ("Porto", None, "PT")
+
+
+def test_image_string_does_not_become_single_char():
+    """schema.org `image` como string: antes virava image_url='h' (image[0])."""
+    ld = {**_JSON_LD, "image": "https://cdn.ticketsports.com.br/x.png"}
+    rec = TicketSportsConnector.parse(TicketSportsConnector.__new__(TicketSportsConnector), _payload(ld))
+    assert rec.image_url == "https://cdn.ticketsports.com.br/x.png"
+
+
+def test_first_image_handles_all_shapes():
+    assert _first_image(["https://a.png", "https://b.png"]) == "https://a.png"
+    assert _first_image("https://a.png") == "https://a.png"
+    assert _first_image({"url": "https://a.png"}) == "https://a.png"      # ImageObject
+    assert _first_image([{"url": "https://a.png"}]) == "https://a.png"
+    assert _first_image([]) is None
+    assert _first_image(None) is None
+
+
+def test_offers_as_list_does_not_crash_parse():
+    """schema.org `offers` como lista de Offers: a 1a disponibilidade vale."""
+    ld = {**_JSON_LD, "offers": [{"@type": "Offer", "availability": "https://schema.org/SoldOut"}]}
+    rec = TicketSportsConnector.parse(TicketSportsConnector.__new__(TicketSportsConnector), _payload(ld))
+    assert rec is not None
+    assert rec.registration_status == RegistrationStatus.SOLD_OUT
+
+
+def test_first_offer_normalizes_shapes():
+    assert _first_offer({"availability": "x"}) == {"availability": "x"}
+    assert _first_offer([{"availability": "x"}]) == {"availability": "x"}
+    assert _first_offer([]) == {}
+    assert _first_offer(None) == {}
 
 
 def test_distances_from_title():

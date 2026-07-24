@@ -138,10 +138,9 @@ class TicketSportsConnector(BaseConnector):
         location_name = (ld.get("location") or {}).get("name") or ""
         city, state, country = _parse_location(location_name)
 
-        offers = ld.get("offers") or {}
+        offers = _first_offer(ld.get("offers"))
         status = _STATUS_MAP.get(offers.get("availability"), RegistrationStatus.UNKNOWN)
 
-        images = ld.get("image") or []
         organizer = (ld.get("organizer") or {}).get("name")
 
         return SourceEventRecord(
@@ -155,7 +154,7 @@ class TicketSportsConnector(BaseConnector):
             start_at=_parse_start_date(ld.get("startDate")),
             registration_status=status,
             official_url=ld.get("url") or payload.source_url,
-            image_url=images[0] if images else None,
+            image_url=_first_image(ld.get("image")),
             city=city,
             state=state,
             country=country,
@@ -193,6 +192,32 @@ def _parse_start_date(value: str | None) -> datetime | None:
     except ValueError:
         return None
     return dt if dt.tzinfo else dt.replace(tzinfo=TZ_BRT)
+
+
+def _first_offer(offers: object) -> dict:
+    """Normaliza o `offers` do schema.org, que pode ser um Offer unico OU uma
+    lista de Offers. Sem isso, uma lista quebraria o `.get('availability')`
+    (AttributeError) e o evento inteiro seria perdido."""
+    if isinstance(offers, list):
+        return next((o for o in offers if isinstance(o, dict)), {})
+    return offers if isinstance(offers, dict) else {}
+
+
+def _first_image(image: object) -> str | None:
+    """Normaliza o `image` do schema.org, que pode ser string, lista OU
+    ImageObject ({'url': ...}). O codigo antigo assumia lista e fazia image[0]:
+    um `image` string viraria image_url='h' (primeiro caractere) — corrupcao
+    silenciosa do campo."""
+    if isinstance(image, str):
+        return image or None
+    if isinstance(image, dict):
+        return image.get("url") or None
+    if isinstance(image, list):
+        for item in image:
+            url = _first_image(item)
+            if url:
+                return url
+    return None
 
 
 # Nome de pais por extenso (como o Ticket Sports escreve) -> ISO-3166 alpha-2.

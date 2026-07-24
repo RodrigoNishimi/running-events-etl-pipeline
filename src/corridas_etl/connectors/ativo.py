@@ -164,11 +164,18 @@ def _country_from_post_json(post_json: str) -> str:
 
 
 def _clean_image(url: str | None) -> str | None:
-    """Alguns thumbnails vem com extensao corrompida no dump ('.pço', '.alq');
-    aceita so URLs http plausiveis."""
+    """Aceita só URLs de imagem plausíveis.
+
+    Alguns thumbnails vêm com a extensão corrompida no dump do Ativo
+    ('.pço', '.alq', '.aoe', '.pçw'...); a extensão real (jpg/png) se perdeu e
+    não é recuperável, então preferimos NENHUMA imagem a um link quebrado.
+
+    BUG CORRIGIDO: o `return url if ... else url` devolvia a URL nos dois ramos
+    (no-op), então as extensões corrompidas passavam direto para o campo.
+    """
     if not url or not url.startswith("http"):
         return None
-    return url if re.search(r"\.(jpg|jpeg|png|webp|gif)$", url, re.IGNORECASE) else url
+    return url if re.search(r"\.(jpg|jpeg|png|webp|gif)$", url, re.IGNORECASE) else None
 
 
 def _distances(raw: object) -> list[Distance]:

@@ -77,6 +77,23 @@ def test_fl_resultado_does_not_close_future_event():
     assert rec.registration_status == RegistrationStatus.OPEN
 
 
+def test_valid_image_passes_through():
+    rec = _conn().parse(_payload(_ITEM))
+    assert rec.image_url == "https://media.ativo.com/upload/evento/40315/img_logo_evento.jpg"
+
+
+def test_corrupted_image_extension_becomes_none():
+    """Extensao corrompida no dump ('.çpo', '.alq'...) -> sem imagem (link quebrado)."""
+    for bad in (
+        "https://media.ativo.com/upload/evento/40315/img_logo_evento.çpo",
+        "https://media.ativo.com/upload/evento/40315/img_logo_evento.alq",
+        "https://media.ativo.com/upload/evento/40315/img_logo_evento.pçw",
+    ):
+        item = {**_ITEM, "thumbnail": bad}
+        rec = _conn().parse(_payload(item))
+        assert rec.image_url is None, bad
+
+
 def test_country_from_post_json_path():
     item = {
         **_ITEM,
