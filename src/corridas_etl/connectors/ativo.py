@@ -4,18 +4,22 @@ Grande portal/agregador de eventos esportivos. O calendario e JS-rendered no
 navegador, mas os dados vem de UM unico JSON estatico publico
 (`/eventos.json`, ~2200 corridas de rua) — nao precisa de Playwright.
 
-Estrategia (mapeada em 2026-07-19):
+Estrategia (mapeada em 2026-07-19, status revisado em 2026-07-24):
   discover -> GET /eventos.json (1 request), filtra corridas de rua
               (tipo_de_evento == "C") nao suspensas; cacheia os itens em
               memoria e emite os ids.
-  fetch    -> monta o RawPayload de um evento a partir do item ja em cache
-              (o /index.json por evento e identico ao item da lista, entao
-              re-baixar seria desperdicio). O raw guardado e o item isolado.
+  fetch    -> monta o RawPayload de um evento a partir do item ja em cache. O
+              dump NAO traz o status de inscricao — esse sinal so existe na
+              pagina de inscricao por evento (pay.ativo.com/evento/<id>). Entao,
+              para provas dentro de STATUS_WINDOW_DAYS, fetch tambem baixa essa
+              pagina e anexa o status classificado (_pay_status) ao raw.
   parse    -> campos do item (titulo/cidade com entidades HTML -> unescape,
-              data, distancias estruturadas, pais no path do post_json).
+              data, distancias estruturadas, pais no path do post_json) e o
+              status de inscricao vindo de _pay_status.
 
-robots.txt permite (bloqueia so areas de e-commerce). Como e um so request
-grande, cacheamos e nao ha rate limit relevante.
+robots.txt de www.ativo.com bloqueia so areas de e-commerce; pay.ativo.com nao
+tem robots e o path /evento/ e livre. Como quase todo o dump e historico, a
+janela deixa o custo em ~1 request por prova futura (poucas dezenas por coleta).
 """
 
 from __future__ import annotations
@@ -25,6 +29,8 @@ import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable
+
+import httpx
 
 from ..models import Distance, RawPayload, RegistrationStatus, SourceEventRecord
 from ..utils.geo import is_br_uf
@@ -40,17 +46,25 @@ TZ_BRT = timezone(timedelta(hours=-3))
 # ha mais de PAST_GRACE_DAYS (mantem provas recentissimas ainda "quentes").
 PAST_GRACE_DAYS = 3
 
+# O status de inscricao NAO vem no dump (eventos.json) — so na pagina de
+# inscricao por evento (pay.ativo.com). Buscar essa pagina custa 1 request por
+# evento, entao so o fazemos para provas dentro desta janela (as que interessam
+# ao usuario e onde o status muda). Fora da janela o status fica UNKNOWN em vez
+# de ser chutado. Compromisso custo-de-rede x cobertura (modo hibrido).
+STATUS_WINDOW_DAYS = 180
+
 # Codigo do pais no path do post_json: .../eventos/<continente>/<pais>/<uf>/...
 _COUNTRY_IN_PATH_RE = re.compile(r"/eventos/[^/]+/([a-z]{2})/")
 
 
 class AtivoConnector(BaseConnector):
     source = "ativo"
-    # v2: status deixou de ser inferido de `fl_resultado` (que marcava provas
-    # FUTURAS com resultado publicado como "encerradas") e passou a usar
-    # fl_suspenso + data. Bump forca o reprocesso de payloads inalterados para a
-    # correcao chegar ao banco. Ver _registration_status e sql/010_parse_version.
-    parse_version = 2
+    # v3: status de inscricao passou a vir da pagina de inscricao por evento
+    # (pay.ativo.com), unica fonte que distingue aberta/encerrada/em breve. O
+    # dump nao carrega esse sinal, entao v1 (fl_resultado) e v2 (futuro->aberto)
+    # eram ambos chute. Bump forca reprocesso p/ a correcao chegar ao banco.
+    # Ver _registration_status / _classify_pay_page e sql/010_parse_version.
+    parse_version = 3
 
     def __init__(self) -> None:
         super().__init__()
@@ -85,6 +99,11 @@ class AtivoConnector(BaseConnector):
         if item is None:
             raise KeyError(f"evento {event_ref} nao encontrado no dump do Ativo")
 
+        # O status de inscricao nao esta no dump: anexamos o sinal da pagina de
+        # inscricao (pay.ativo.com), so para provas dentro da janela. Vira parte
+        # do raw (Bronze) para o incremental detectar mudancas de status.
+        item = {**item, "_pay_status": self._pay_status(event_ref, item)}
+
         page_url = (item.get("post_json") or "").replace("/index.json", "") or None
         return self.make_payload(
             event_ref,
@@ -92,6 +111,29 @@ class AtivoConnector(BaseConnector):
             url=page_url,
             content_type="application/json",
         )
+
+    def _pay_status(self, event_ref: str, item: dict) -> str | None:
+        """Classifica a inscricao pela pagina pay.ativo.com/evento/<id>.
+
+        Retorna 'open' | 'closed' | 'coming_soon' para provas dentro da janela;
+        None se fora da janela ou se a pagina nao pode ser lida/classificada
+        (nesses casos o status resultante e UNKNOWN — nao chutamos).
+        """
+        dt = _parse_dt(item.get("dt_evento"))
+        if dt is None:
+            return None
+        days = (dt.date() - date.today()).days
+        if not (0 <= days <= STATUS_WINDOW_DAYS):
+            return None
+        try:
+            body = self.http_get(SIGNUP_URL.format(id=event_ref)).text
+        except httpx.HTTPStatusError as e:
+            # pay.ativo.com serve paginas de status (ex.: "esgotado") com codigos
+            # nao-2xx (418). O corpo ainda traz o sinal — classificamos mesmo assim.
+            body = e.response.text if e.response is not None else ""
+        except Exception:
+            return None       # falha de transporte real -> UNKNOWN, sem chute
+        return _classify_pay_page(body)
 
     def parse(self, payload: RawPayload) -> SourceEventRecord | None:
         item = json.loads(payload.body)
@@ -128,27 +170,59 @@ def _truthy(v: object) -> bool:
 
 
 def _registration_status(item: dict) -> RegistrationStatus:
-    """Status da inscricao a partir do dump do Ativo.
+    """Status da inscricao do evento do Ativo.
 
-    O Ativo NAO expoe um sinal explicito de inscricao aberta/encerrada, entao
-    inferimos dos sinais confiaveis que temos:
+    O status REAL so existe na pagina de inscricao por evento (pay.ativo.com),
+    anexada em fetch() como `_pay_status`. O dump (eventos.json) NAO o carrega —
+    todos os flags (fl_resultado, fl_suspenso, situacao_cadastro, datas) sao
+    identicos entre provas abertas e encerradas, entao qualquer inferencia a
+    partir dele e chute. Historico dos bugs:
 
-      - `fl_suspenso` verdadeiro -> evento suspenso, inscricao indisponivel (CLOSED).
-      - `dt_evento` no passado    -> a prova ja aconteceu, inscricao encerrada (CLOSED).
-      - caso contrario (prova futura, listada no calendario ativo e nao suspensa,
-        com link de inscricao em pay.ativo.com) -> inscricao presumida ABERTA.
+      - v1 usava `fl_resultado=1` -> "encerrada": errado, esse flag vem 1 ate
+        para provas FUTURAS com inscricao aberta.
+      - v2 assumia "futura e nao suspensa" -> ABERTA: errado, marcava como
+        aberta provas com inscricao ja encerrada ou ainda "em breve".
 
-    BUG CORRIGIDO: antes o status vinha de `fl_resultado` ("prova ja tem
-    resultado -> encerrada"). Esse flag na verdade marca eventos que publicam
-    resultado no Ativo e vem 1 ATE para provas FUTURAS, o que classificava
-    corridas com inscricao aberta como encerradas. Ele nao e sinal de inscricao.
+    Ordem atual:
+      - `fl_suspenso` verdadeiro -> evento suspenso (CLOSED).
+      - `dt_evento` no passado    -> prova ja aconteceu (CLOSED).
+      - `_pay_status` da pagina de inscricao -> open / closed / coming_soon.
+      - sem sinal (fora da janela ou pagina ilegivel) -> UNKNOWN (nao chuta).
     """
     if _truthy(item.get("fl_suspenso")):
         return RegistrationStatus.CLOSED
     dt = _parse_dt(item.get("dt_evento"))
     if dt is not None and dt.date() < date.today():
         return RegistrationStatus.CLOSED
-    return RegistrationStatus.OPEN
+    return {
+        "open": RegistrationStatus.OPEN,
+        "closed": RegistrationStatus.CLOSED,
+        "coming_soon": RegistrationStatus.COMING_SOON,
+        "sold_out": RegistrationStatus.SOLD_OUT,
+    }.get(item.get("_pay_status"), RegistrationStatus.UNKNOWN)
+
+
+def _classify_pay_page(body: str) -> str | None:
+    """Le a pagina pay.ativo.com/evento/<id> -> status de inscricao.
+
+    Estados observados na fonte (2026-07-24):
+      - "vagas ja preenchidas / alta demanda / esgotado"  -> sold_out
+        (a pagina de esgotado tambem diz "encerradas", entao vem ANTES).
+      - "Inscricoes encerradas!" (tambem "... para publico geral") -> closed.
+      - "Inscricoes em breve..."                          -> coming_soon.
+      - fluxo real de kits/checkout (Escolha do Kit, Quero este, R$) -> open.
+    Retorna None se nada casar (pagina inesperada -> status UNKNOWN, sem chute).
+    """
+    low = html_lib.unescape(body).lower()
+    if "esgotad" in low or "preenchid" in low:
+        return "sold_out"
+    if "encerrad" in low:
+        return "closed"
+    if "em breve" in low:
+        return "coming_soon"
+    if re.search(r"escolha do kit|quero este|adicionar|r\$\s*\d", low):
+        return "open"
+    return None
 
 
 def _parse_dt(value: str | None) -> datetime | None:

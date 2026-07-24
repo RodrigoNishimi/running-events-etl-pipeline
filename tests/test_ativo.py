@@ -1,14 +1,19 @@
 import json
 from datetime import date, datetime, timedelta
 
-from corridas_etl.connectors.ativo import AtivoConnector
+import httpx
+import pytest
+
+from corridas_etl.connectors.ativo import AtivoConnector, _classify_pay_page
 from corridas_etl.models import RawPayload, RegistrationStatus
 
 _FUTURE = (date.today() + timedelta(days=30)).strftime("%Y-%m-%d 00:00:00")
 _PAST = (date.today() - timedelta(days=30)).strftime("%Y-%m-%d 00:00:00")
+_FAR = (date.today() + timedelta(days=400)).strftime("%Y-%m-%d 00:00:00")
 
 # Item reduzido do /eventos.json real (capturado 2026-07-19). Data no futuro
-# para representar um evento com inscricao (o dump so traz eventos vindouros).
+# para representar um evento vindouro. O status de inscricao NAO vem no dump: e
+# anexado em fetch() como `_pay_status` a partir da pagina de inscricao.
 _ITEM = {
     "id_evento": "40315",
     "post_title": "Corrida do Bem Eco - Marab&aacute;",
@@ -44,8 +49,10 @@ def _conn() -> AtivoConnector:
     return AtivoConnector.__new__(AtivoConnector)
 
 
+# --- parse (campos estruturais) -------------------------------------------
+
 def test_parse_event():
-    rec = _conn().parse(_payload(_ITEM))
+    rec = _conn().parse(_payload({**_ITEM, "_pay_status": "open"}))
     assert rec is not None
     assert rec.name == "Corrida do Bem Eco - Marabá"       # entidade HTML resolvida
     assert rec.city == "Marabá"
@@ -53,27 +60,6 @@ def test_parse_event():
     assert rec.country == "BR"
     assert {d.distance_km for d in rec.distances} == {5.0, 10.0}
     assert rec.official_url == "https://pay.ativo.com/evento/40315"
-    # Prova futura, nao suspensa -> inscricao presumida aberta (mesmo com
-    # fl_resultado=1, que NAO e sinal de inscricao encerrada).
-    assert rec.registration_status == RegistrationStatus.OPEN
-
-
-def test_past_event_is_closed():
-    item = {**_ITEM, "dt_evento": _PAST}
-    rec = _conn().parse(_payload(item))
-    assert rec.registration_status == RegistrationStatus.CLOSED
-
-
-def test_suspended_event_is_closed():
-    item = {**_ITEM, "fl_suspenso": 1}
-    rec = _conn().parse(_payload(item))
-    assert rec.registration_status == RegistrationStatus.CLOSED
-
-
-def test_fl_resultado_does_not_close_future_event():
-    """Regressao: fl_resultado=1 nao pode encerrar a inscricao de prova futura."""
-    item = {**_ITEM, "fl_resultado": "1", "dt_evento": _FUTURE}
-    rec = _conn().parse(_payload(item))
     assert rec.registration_status == RegistrationStatus.OPEN
 
 
@@ -109,3 +95,119 @@ def test_empty_distances_ok():
     item = {**_ITEM, "distancias": []}
     rec = _conn().parse(_payload(item))
     assert rec.distances == []
+
+
+# --- status de inscricao ---------------------------------------------------
+
+@pytest.mark.parametrize("pay,expected", [
+    ("open", RegistrationStatus.OPEN),
+    ("closed", RegistrationStatus.CLOSED),
+    ("coming_soon", RegistrationStatus.COMING_SOON),
+    ("sold_out", RegistrationStatus.SOLD_OUT),
+])
+def test_status_from_pay_signal(pay, expected):
+    rec = _conn().parse(_payload({**_ITEM, "_pay_status": pay}))
+    assert rec.registration_status == expected
+
+
+def test_no_pay_signal_is_unknown():
+    """Sem o sinal da pagina de inscricao (fora da janela / pagina ilegivel)
+    o status e UNKNOWN — nao chutamos a partir do dump."""
+    rec = _conn().parse(_payload(_ITEM))          # _ITEM nao tem _pay_status
+    assert rec.registration_status == RegistrationStatus.UNKNOWN
+
+
+def test_past_event_is_closed():
+    item = {**_ITEM, "dt_evento": _PAST, "_pay_status": "open"}  # passado vence o sinal
+    rec = _conn().parse(_payload(item))
+    assert rec.registration_status == RegistrationStatus.CLOSED
+
+
+def test_suspended_event_is_closed():
+    item = {**_ITEM, "fl_suspenso": 1, "_pay_status": "open"}    # suspenso vence o sinal
+    rec = _conn().parse(_payload(item))
+    assert rec.registration_status == RegistrationStatus.CLOSED
+
+
+def test_fl_resultado_does_not_close_future_event():
+    """Regressao: fl_resultado=1 nao pode encerrar a inscricao de prova futura.
+    Sem sinal da pagina, o status e UNKNOWN — mas nunca CLOSED por fl_resultado."""
+    item = {**_ITEM, "fl_resultado": "1", "dt_evento": _FUTURE}
+    rec = _conn().parse(_payload(item))
+    assert rec.registration_status != RegistrationStatus.CLOSED
+    assert rec.registration_status == RegistrationStatus.UNKNOWN
+
+
+# --- classificador da pagina de inscricao ----------------------------------
+
+@pytest.mark.parametrize("html,expected", [
+    ("<h2>Inscri&ccedil;&otilde;es encerradas!</h2>", "closed"),
+    ("ATENÇÃO: Inscrições encerradas para público geral!", "closed"),
+    ("<h2>Inscrições em breve...</h2>", "coming_soon"),
+    ("Escolha do Kit ... Quero este Kit R$ 115,00", "open"),
+    # pagina de esgotado tambem diz "encerradas" -> sold_out tem prioridade
+    ("Inscrições ENCERRADAS. Todas as vagas preenchidas devido à alta demanda.", "sold_out"),
+    ("<html><body>pagina inesperada</body></html>", None),
+])
+def test_classify_pay_page(html, expected):
+    assert _classify_pay_page(html) == expected
+
+
+# --- fetch: janela e anexo do _pay_status ----------------------------------
+
+class _Resp:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+def test_fetch_attaches_pay_status_within_window(monkeypatch):
+    c = _conn()
+    c._items = {"40315": _ITEM}
+    monkeypatch.setattr(c, "http_get", lambda url: _Resp("<h2>Inscrições encerradas!</h2>"))
+    payload = c.fetch("40315")
+    assert json.loads(payload.body)["_pay_status"] == "closed"
+    assert c.parse(payload).registration_status == RegistrationStatus.CLOSED
+
+
+def test_fetch_skips_pay_page_out_of_window(monkeypatch):
+    c = _conn()
+    c._items = {"40315": {**_ITEM, "dt_evento": _FAR}}
+
+    def boom(url):
+        raise AssertionError("nao deve buscar a pagina de inscricao fora da janela")
+
+    monkeypatch.setattr(c, "http_get", boom)
+    payload = c.fetch("40315")
+    assert json.loads(payload.body)["_pay_status"] is None
+    assert c.parse(payload).registration_status == RegistrationStatus.UNKNOWN
+
+
+def test_fetch_tolerates_pay_page_error(monkeypatch):
+    c = _conn()
+    c._items = {"40315": _ITEM}
+
+    def boom(url):
+        raise RuntimeError("rede indisponivel")
+
+    monkeypatch.setattr(c, "http_get", boom)
+    payload = c.fetch("40315")                    # nao propaga o erro
+    assert json.loads(payload.body)["_pay_status"] is None
+    assert c.parse(payload).registration_status == RegistrationStatus.UNKNOWN
+
+
+def test_fetch_classifies_non_2xx_body(monkeypatch):
+    """pay.ativo.com serve a pagina de 'esgotado' com HTTP 418; o corpo ainda
+    traz o sinal e deve ser classificado (nao virar UNKNOWN)."""
+    c = _conn()
+    c._items = {"40315": _ITEM}
+    req = httpx.Request("GET", "https://pay.ativo.com/evento/40315")
+    resp = httpx.Response(418, request=req,
+                          text="Inscrições ENCERRADAS. Vagas preenchidas, alta demanda.")
+
+    def raise_418(url):
+        raise httpx.HTTPStatusError("418", request=req, response=resp)
+
+    monkeypatch.setattr(c, "http_get", raise_418)
+    payload = c.fetch("40315")
+    assert json.loads(payload.body)["_pay_status"] == "sold_out"
+    assert c.parse(payload).registration_status == RegistrationStatus.SOLD_OUT
