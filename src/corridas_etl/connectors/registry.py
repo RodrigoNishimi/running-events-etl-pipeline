@@ -9,7 +9,9 @@ from __future__ import annotations
 from .ativo import AtivoConnector
 from .base import BaseConnector
 from .iguanasports import IguanaSportsConnector
+from .liverun import LiveRunConnector
 from .runningland import RunningLandConnector
+from .tfsports import TFSportsConnector
 from .ticketsports import TicketSportsConnector
 from .yescom import YescomConnector
 
@@ -19,6 +21,8 @@ _CONNECTORS: dict[str, type[BaseConnector]] = {
     AtivoConnector.source: AtivoConnector,
     IguanaSportsConnector.source: IguanaSportsConnector,
     YescomConnector.source: YescomConnector,
+    LiveRunConnector.source: LiveRunConnector,
+    TFSportsConnector.source: TFSportsConnector,
 }
 
 

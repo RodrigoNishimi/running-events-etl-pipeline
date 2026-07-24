@@ -33,7 +33,7 @@ log = logging.getLogger("corridas_etl.daily")
 
 # Fontes reais, na ordem de execucao (rapidas primeiro; ticketsports por
 # ultimo por ser o mais lento — descoberta agentica).
-SOURCES = ("iguanasports", "runningland", "yescom", "ativo", "ticketsports")
+SOURCES = ("iguanasports", "runningland", "yescom", "ativo", "liverun", "tfsports", "ticketsports")
 
 # Paginas renderizadas por execucao no enriquecimento de distancias.
 ENRICH_DISTANCES_PER_RUN = 25

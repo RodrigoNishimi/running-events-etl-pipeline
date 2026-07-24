@@ -11,6 +11,7 @@ venv/
 # Ambiente e dados locais
 .env
 data/
+docs/
 
 # Editores
 .vscode/
