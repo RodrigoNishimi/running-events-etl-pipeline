@@ -50,7 +50,11 @@ _EVENTS_QUERY = (
     "$filters:ProductAttributeFilterInput!)"
     "{products(pageSize:$pageSize currentPage:$currentPage filter:$filters)"
     "{items{id name sku url_key stock_status "
-    "price_range{minimum_price{regular_price{currency value}}}"
+    # final_price ja reflete promocao/regra de catalogo (e o preco realmente
+    # cobrado); regular_price fica como fallback. Sem final_price a promocao
+    # nunca era capturada e o preco vinha inflado (o regular).
+    "price_range{minimum_price{regular_price{currency value}"
+    "final_price{currency value}}}"
     "thumbnail{url}event_product event_date event_region event_city event_modality}"
     "page_info{total_pages}total_count}}"
 )
@@ -218,15 +222,21 @@ class RunningLandConnector(BaseConnector):
 
 
 def _min_price(item: dict) -> float | None:
-    """Menor preço: special_price (promoção) se houver, senão o regular."""
-    regular = (
-        ((item.get("price_range") or {}).get("minimum_price") or {})
-        .get("regular_price") or {}
-    ).get("value")
-    special = item.get("special_price")
-    # preço 0 é placeholder ("ainda sem valor"), não gratuito -> desconhecido
-    candidates = [p for p in (regular, special) if isinstance(p, (int, float)) and p > 0]
-    return round(min(candidates), 2) if candidates else None
+    """Menor preço realmente cobrado: final_price (já com promoção) e, na falta
+    dele, o regular_price.
+
+    O `minimum_price` do Magento já é o menor entre as variações do produto; o
+    `final_price` embute special_price/regras de catálogo. Usar só o
+    `regular_price` (como antes) fazia o preço vir inflado quando havia promoção.
+    Preço 0 é placeholder ("ainda sem valor"), não gratuito -> desconhecido.
+    """
+    minimum = ((item.get("price_range") or {}).get("minimum_price") or {})
+    final = (minimum.get("final_price") or {}).get("value")
+    regular = (minimum.get("regular_price") or {}).get("value")
+    for price in (final, regular):
+        if isinstance(price, (int, float)) and price > 0:
+            return round(price, 2)
+    return None
 
 
 def _urlquote(text: str) -> str:

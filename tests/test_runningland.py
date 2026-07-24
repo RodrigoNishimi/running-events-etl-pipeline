@@ -1,11 +1,11 @@
 import json
 from datetime import datetime
 
-from corridas_etl.connectors.runningland import RunningLandConnector, _parse_date
+from corridas_etl.connectors.runningland import RunningLandConnector, _min_price, _parse_date
 from corridas_etl.models import RawPayload, RegistrationStatus
 
 # Payload Bronze como o fetch grava: item cru do GraphQL (capturado 2026-07-19)
-# + atributos resolvidos daquele item.
+# + atributos resolvidos daquele item. Sem promocao: final_price == regular_price.
 _BODY = {
     "item": {
         "id": 53317,
@@ -19,7 +19,12 @@ _BODY = {
         "event_city": 26,
         "event_modality": "38,41",
         "thumbnail": {"url": "https://magento.runningland.com.br/media/x.jpg"},
-        "price_range": {"minimum_price": {"regular_price": {"currency": "BRL", "value": 209.99}}},
+        "price_range": {
+            "minimum_price": {
+                "regular_price": {"currency": "BRL", "value": 209.99},
+                "final_price": {"currency": "BRL", "value": 209.99},
+            }
+        },
     },
     "resolved": {"region": "SP", "city": "São Paulo", "modalities": ["5K", "10K"]},
 }
@@ -50,6 +55,38 @@ def test_parse_event():
     assert rec.start_at.date() == datetime(2026, 9, 27).date()
     assert {d.distance_km for d in rec.distances} == {5.0, 10.0}
     assert rec.registration_status == RegistrationStatus.OPEN
+    assert rec.price == 209.99
+
+
+def test_price_uses_promotional_final_price():
+    """Com promocao, o preco cobrado (final_price) vence o regular_price."""
+    item = {
+        "price_range": {
+            "minimum_price": {
+                "regular_price": {"currency": "BRL", "value": 209.99},
+                "final_price": {"currency": "BRL", "value": 179.99},
+            }
+        }
+    }
+    assert _min_price(item) == 179.99
+
+
+def test_price_falls_back_to_regular_without_final():
+    item = {"price_range": {"minimum_price": {"regular_price": {"value": 150.0}}}}
+    assert _min_price(item) == 150.0
+
+
+def test_placeholder_zero_price_is_unknown():
+    item = {
+        "price_range": {
+            "minimum_price": {
+                "regular_price": {"value": 0},
+                "final_price": {"value": 0},
+            }
+        }
+    }
+    assert _min_price(item) is None
+    assert _min_price({}) is None
 
 
 def test_out_of_stock_is_sold_out():

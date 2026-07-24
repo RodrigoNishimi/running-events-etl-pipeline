@@ -108,13 +108,7 @@ class AtivoConnector(BaseConnector):
             name=name,
             organizer_name=item.get("nome_organizador") or None,
             start_at=_parse_dt(item.get("dt_evento")),
-            # A inscricao encerra/abre nao vem explicita; fl_resultado=1 indica
-            # prova ja realizada (tem resultado) -> inscricao encerrada.
-            registration_status=(
-                RegistrationStatus.CLOSED
-                if _truthy(item.get("fl_resultado"))
-                else RegistrationStatus.UNKNOWN
-            ),
+            registration_status=_registration_status(item),
             official_url=SIGNUP_URL.format(id=payload.source_event_id),
             image_url=_clean_image(item.get("thumbnail")),
             city=city,
@@ -126,6 +120,30 @@ class AtivoConnector(BaseConnector):
 
 def _truthy(v: object) -> bool:
     return str(v).strip() not in ("", "0", "None", "none", "False", "false")
+
+
+def _registration_status(item: dict) -> RegistrationStatus:
+    """Status da inscricao a partir do dump do Ativo.
+
+    O Ativo NAO expoe um sinal explicito de inscricao aberta/encerrada, entao
+    inferimos dos sinais confiaveis que temos:
+
+      - `fl_suspenso` verdadeiro -> evento suspenso, inscricao indisponivel (CLOSED).
+      - `dt_evento` no passado    -> a prova ja aconteceu, inscricao encerrada (CLOSED).
+      - caso contrario (prova futura, listada no calendario ativo e nao suspensa,
+        com link de inscricao em pay.ativo.com) -> inscricao presumida ABERTA.
+
+    BUG CORRIGIDO: antes o status vinha de `fl_resultado` ("prova ja tem
+    resultado -> encerrada"). Esse flag na verdade marca eventos que publicam
+    resultado no Ativo e vem 1 ATE para provas FUTURAS, o que classificava
+    corridas com inscricao aberta como encerradas. Ele nao e sinal de inscricao.
+    """
+    if _truthy(item.get("fl_suspenso")):
+        return RegistrationStatus.CLOSED
+    dt = _parse_dt(item.get("dt_evento"))
+    if dt is not None and dt.date() < date.today():
+        return RegistrationStatus.CLOSED
+    return RegistrationStatus.OPEN
 
 
 def _parse_dt(value: str | None) -> datetime | None:
