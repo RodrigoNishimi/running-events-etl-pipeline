@@ -19,7 +19,9 @@ Passos:
       Resolve (cidade, UF) -> lat/long via Nominatim/OSM, com cache em tabela
       (misses inclusive) e rate limit de 1 req/s conforme a politica de uso
       deles. Preenche event.latitude/longitude no nivel de cidade — suficiente
-      para "corridas perto de mim"; endereco exato fica para depois.
+      para "corridas perto de mim"; endereco exato fica para depois. Marca
+      location_precision='city' para que o app nao crave um alfinete no centro
+      da cidade (o local exato da largada nao e conhecido).
 """
 
 from __future__ import annotations
@@ -268,10 +270,13 @@ def enrich_geocode(conn: psycopg.Connection, limit: int | None) -> int:
         if coords is None:
             log.info("  '%s/%s': sem resultado (miss cacheado)", city, state)
 
-    # Aplica o cache (novo e antigo) aos eventos sem coordenadas.
+    # Aplica o cache (novo e antigo) aos eventos sem coordenadas. As coordenadas
+    # sao o centroide da cidade, entao marcamos precision='city': o app mostra a
+    # cidade como um todo em vez de cravar um alfinete no centro.
     updated = conn.execute(
         """
         UPDATE event e SET latitude = g.latitude, longitude = g.longitude,
+                           location_precision = 'city',
                            updated_at = now()
         FROM geocode_cache g
         WHERE e.city = g.city AND e.state = g.state
