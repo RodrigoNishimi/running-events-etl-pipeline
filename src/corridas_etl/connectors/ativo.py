@@ -46,6 +46,11 @@ _COUNTRY_IN_PATH_RE = re.compile(r"/eventos/[^/]+/([a-z]{2})/")
 
 class AtivoConnector(BaseConnector):
     source = "ativo"
+    # v2: status deixou de ser inferido de `fl_resultado` (que marcava provas
+    # FUTURAS com resultado publicado como "encerradas") e passou a usar
+    # fl_suspenso + data. Bump forca o reprocesso de payloads inalterados para a
+    # correcao chegar ao banco. Ver _registration_status e sql/010_parse_version.
+    parse_version = 2
 
     def __init__(self) -> None:
         super().__init__()

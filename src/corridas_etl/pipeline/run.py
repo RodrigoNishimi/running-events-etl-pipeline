@@ -39,13 +39,13 @@ def run_source(
     raw_store = RawStore()
     canonical: list[CanonicalEvent] = []
 
-    # Hashes da ultima coleta, para detectar o que nao mudou.
-    known_hashes: dict[str, str] = {}
+    # Estado da ultima coleta ({id: (raw_hash, parse_version)}), p/ o incremental.
+    known_state: dict[str, tuple[str, int]] = {}
     if not dry_run and not full:
-        from ..db import connect, load_source_hashes
+        from ..db import connect, load_source_state
 
         with connect() as conn:
-            known_hashes = load_source_hashes(conn, source)
+            known_state = load_source_state(conn, source)
 
     unchanged_ids: list[str] = []
 
@@ -59,9 +59,11 @@ def run_source(
         for ref in refs:
             payload = connector.fetch(ref)          # Bronze
 
-            # Incremental: hash igual ao da ultima coleta -> nada mudou.
-            prev = known_hashes.get(payload.source_event_id)
-            if prev and prev == payload.content_hash:
+            # Incremental: pula so se o payload bruto E a versao do parser que o
+            # processou continuam iguais. Se a logica de parse mudou (versao do
+            # conector bumpada), reprocessa mesmo com o payload inalterado.
+            prev = known_state.get(payload.source_event_id)
+            if prev and prev == (payload.content_hash, connector.parse_version):
                 unchanged_ids.append(payload.source_event_id)
                 continue
 
@@ -73,6 +75,7 @@ def run_source(
                 log.warning("[%s] ref %s ignorada (nao e evento valido)", source, ref)
                 continue
 
+            record.parse_version = connector.parse_version
             canonical.append(CanonicalEvent.from_source(record))
     finally:
         connector.close()

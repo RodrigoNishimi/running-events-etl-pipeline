@@ -29,13 +29,20 @@ def connect() -> Iterator[psycopg.Connection]:
         conn.close()
 
 
-def load_source_hashes(conn: psycopg.Connection, source: str) -> dict[str, str]:
-    """{source_event_id: raw_hash} da ultima coleta — base do incremental."""
+def load_source_state(
+    conn: psycopg.Connection, source: str
+) -> dict[str, tuple[str, int]]:
+    """{source_event_id: (raw_hash, parse_version)} da ultima coleta.
+
+    Base do incremental: um payload so e pulado se o hash bruto E a versao do
+    parser que o processou continuarem iguais. Se a logica de parse mudou (versao
+    do conector bumpada), o registro e reprocessado mesmo com o payload inalterado.
+    """
     rows = conn.execute(
-        "SELECT source_event_id, raw_hash FROM source_record WHERE source = %s",
+        "SELECT source_event_id, raw_hash, parse_version FROM source_record WHERE source = %s",
         (source,),
     ).fetchall()
-    return {r[0]: r[1] for r in rows if r[1]}
+    return {r[0]: (r[1], r[2]) for r in rows if r[1]}
 
 
 def touch_source_records(
@@ -183,16 +190,19 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
             cur.execute(
                 """
                 INSERT INTO source_record (
-                    event_id, source, source_event_id, source_url, raw_hash, price, last_seen_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, now())
+                    event_id, source, source_event_id, source_url, raw_hash,
+                    parse_version, price, last_seen_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, now())
                 ON CONFLICT (source, source_event_id) DO UPDATE SET
                     event_id = EXCLUDED.event_id,
                     source_url = EXCLUDED.source_url,
                     raw_hash = EXCLUDED.raw_hash,
+                    parse_version = EXCLUDED.parse_version,
                     price = EXCLUDED.price,
                     last_seen_at = now()
                 """,
-                (event_id, src.source, src.source_event_id, src.source_url, src.raw_hash, src.price),
+                (event_id, src.source, src.source_event_id, src.source_url,
+                 src.raw_hash, src.parse_version, src.price),
             )
 
         # Preco do evento = MENOR entre suas fontes (deterministico -> estavel;

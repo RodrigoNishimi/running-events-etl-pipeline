@@ -61,6 +61,9 @@ class SourceEventRecord(BaseModel):
     source_event_id: str
     source_url: str | None = None
     raw_hash: str | None = None
+    # Versao da logica de parse que gerou este registro (BaseConnector.parse_version).
+    # Persistida em source_record para o gate incremental reprocessar quando muda.
+    parse_version: int = 1
 
     name: str
     description: str | None = None

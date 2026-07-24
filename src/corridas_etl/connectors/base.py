@@ -29,6 +29,13 @@ class BaseConnector(ABC):
     #: Identificador curto e estavel da fonte (ex.: "ativo", "yescom").
     source: str
 
+    #: Versao da logica de parse(). Bumpar quando parse() passar a REINTERPRETAR
+    #: payloads antigos de forma diferente (ex.: correcao de como o status e
+    #: inferido). O gate incremental (pipeline/run.py) reprocessa todo
+    #: source_record cuja parse_version gravada != esta, mesmo com o payload
+    #: bruto inalterado — assim a correcao chega ao banco sem depender de --full.
+    parse_version: int = 1
+
     def __init__(self) -> None:
         self._client = httpx.Client(
             headers={"User-Agent": settings.user_agent},
