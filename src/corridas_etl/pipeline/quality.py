@@ -25,13 +25,24 @@ from dataclasses import dataclass, field
 
 import psycopg
 
+from ..connectors.registry import available_sources
+from ..db import one_row
 from ..utils.geo import BR_UFS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("corridas_etl.quality")
 
 # Fontes que DEVEM ter registros no banco (conector rodando em producao).
-EXPECTED_SOURCES = ("ticketsports", "runningland", "ativo", "iguanasports", "yescom")
+def expected_sources() -> tuple[str, ...]:
+    """Fontes que o gate de qualidade espera ver no banco: TODAS as registradas.
+
+    Derivado do registry, e nao repetido a mao, porque a lista manual ja atrasou
+    duas vezes: `liverun` e `tfsports` ficaram de fora desde que foram escritos,
+    entao o relatorio dizia "0 criticos" mesmo se elas parassem de coletar — foi
+    exatamente o que aconteceu quando o liverun quebrou em CI (2026-07-25).
+    Registrar um conector agora basta para ele ser monitorado.
+    """
+    return tuple(available_sources())
 
 # Idade maxima da coleta mais recente por fonte antes de alertar.
 MAX_FETCH_AGE_HOURS = 48
@@ -68,7 +79,7 @@ def check_source_health(conn: psycopg.Connection, report: Report) -> None:
     ).fetchall()
     by_source = {r[0]: r for r in rows}
 
-    for source in EXPECTED_SOURCES:
+    for source in expected_sources():
         row = by_source.get(source)
         if row is None or row[1] == 0:
             report.critical(f"fonte '{source}': NENHUM registro no banco (conector quebrado?)")
@@ -85,53 +96,53 @@ def check_source_health(conn: psycopg.Connection, report: Report) -> None:
 # -- Anomalias ----------------------------------------------------------------
 
 def check_anomalies(conn: psycopg.Connection, report: Report) -> None:
-    bad_uf = conn.execute(
+    bad_uf = one_row(conn.execute(
         "SELECT count(*) FROM event WHERE country = 'BR' AND state IS NOT NULL AND state <> ALL(%s)",
         (list(BR_UFS),),
-    ).fetchone()[0]
+    ))[0]
     if bad_uf:
         report.warn(f"{bad_uf} evento(s) brasileiro(s) com UF invalida")
 
-    br_without_uf = conn.execute(
+    br_without_uf = one_row(conn.execute(
         "SELECT count(*) FROM event WHERE country = 'BR' AND city IS NOT NULL AND state IS NULL"
-    ).fetchone()[0]
+    ))[0]
     if br_without_uf:
         report.warn(f"{br_without_uf} evento(s) brasileiro(s) com cidade mas sem UF")
 
-    past_open = conn.execute(
+    past_open = one_row(conn.execute(
         """SELECT count(*) FROM event
            WHERE start_at < now() - interval '1 day' AND registration_status = 'open'"""
-    ).fetchone()[0]
+    ))[0]
     if past_open:
         report.warn(f"{past_open} evento(s) ja realizados mas ainda 'open' (stale)")
 
-    far_future = conn.execute(
+    far_future = one_row(conn.execute(
         "SELECT count(*) FROM event WHERE start_at > now() + interval '2 years'"
-    ).fetchone()[0]
+    ))[0]
     if far_future:
         report.warn(f"{far_future} evento(s) com data a mais de 2 anos no futuro")
 
-    bad_dist = conn.execute(
+    bad_dist = one_row(conn.execute(
         "SELECT count(*) FROM event_distance WHERE distance_km < %s OR distance_km > %s",
         (DIST_MIN_KM, DIST_MAX_KM),
-    ).fetchone()[0]
+    ))[0]
     if bad_dist:
         report.warn(f"{bad_dist} distancia(s) fora da faixa {DIST_MIN_KM}-{DIST_MAX_KM} km")
 
-    orphans = conn.execute(
+    orphans = one_row(conn.execute(
         """SELECT count(*) FROM event e
            WHERE NOT EXISTS (SELECT 1 FROM source_record sr WHERE sr.event_id = e.id)"""
-    ).fetchone()[0]
+    ))[0]
     if orphans:
         report.warn(f"{orphans} evento(s) sem nenhum source_record (orfaos de merge?)")
 
     # Bounding box do Brasil incluindo ilhas oceanicas (Noronha ~-32.4,
     # Trindade ~-29.3 de longitude). So aplica a eventos BR — internacionais
     # legitimamente caem fora.
-    out_of_bounds = conn.execute(
+    out_of_bounds = one_row(conn.execute(
         """SELECT count(*) FROM event WHERE country = 'BR' AND latitude IS NOT NULL
            AND NOT (latitude BETWEEN -34 AND 6 AND longitude BETWEEN -74 AND -28)"""
-    ).fetchone()[0]
+    ))[0]
     if out_of_bounds:
         report.warn(f"{out_of_bounds} evento(s) BR geocodificados fora do Brasil")
 
@@ -139,7 +150,7 @@ def check_anomalies(conn: psycopg.Connection, report: Report) -> None:
 # -- Cobertura ----------------------------------------------------------------
 
 def check_coverage(conn: psycopg.Connection, report: Report) -> None:
-    total, with_date, with_city, with_dist = conn.execute(
+    total, with_date, with_city, with_dist = one_row(conn.execute(
         """
         SELECT count(*),
                count(*) FILTER (WHERE start_at IS NOT NULL),
@@ -148,7 +159,7 @@ def check_coverage(conn: psycopg.Connection, report: Report) -> None:
                    (SELECT 1 FROM event_distance d WHERE d.event_id = event.id))
         FROM event
         """
-    ).fetchone()
+    ))
     if not total:
         report.critical("banco sem nenhum evento")
         return

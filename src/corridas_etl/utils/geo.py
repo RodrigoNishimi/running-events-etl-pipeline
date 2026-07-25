@@ -14,4 +14,6 @@ BR_UFS: frozenset[str] = frozenset(
 
 def is_br_uf(value: str | None) -> bool:
     """True se `value` for uma UF brasileira valida (ex.: descarta 'BR', 'XX')."""
-    return bool(value) and value.strip().upper() in BR_UFS
+    if not value:
+        return False
+    return value.strip().upper() in BR_UFS

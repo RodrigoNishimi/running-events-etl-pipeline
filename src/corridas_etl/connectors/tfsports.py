@@ -238,6 +238,9 @@ def _first_image(image: object) -> str | None:
 
 
 def _cover_image(event_data: dict | None) -> str | None:
+    if event_data is None:
+        return None
+    # O except cobre o resto do caminho: qualquer nivel pode faltar ou nao ser dict.
     try:
         return event_data["coverImage"]["data"]["attributes"]["url"] or None
     except (KeyError, TypeError):

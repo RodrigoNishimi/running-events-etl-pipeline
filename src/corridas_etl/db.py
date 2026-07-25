@@ -7,13 +7,30 @@ o pipeline duas vezes atualiza o evento em vez de duplica-lo.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Any, Iterator
 
 import psycopg
 
 from .config import settings
 from .models import CanonicalEvent
 from .utils.text import slugify
+
+
+def one_row(cur: psycopg.Cursor) -> tuple[Any, ...]:
+    """A linha unica que a query garante retornar.
+
+    `fetchone()` e tipado como opcional porque, em geral, uma query pode nao
+    retornar linha nenhuma. Nos usos abaixo isso e impossivel por construcao —
+    agregados (`count(*)`) sempre devolvem uma linha, e `RETURNING` vem de um
+    INSERT/UPDATE garantido. Este helper carrega essa invariante no tipo e, se
+    ela algum dia for violada (query editada, tabela trocada), falha com uma
+    mensagem clara em vez de um `TypeError: 'NoneType' is not subscriptable`
+    solto vinte linhas adiante.
+    """
+    row = cur.fetchone()
+    if row is None:      # pragma: no cover - invariante do SQL, nao um caminho de dados
+        raise RuntimeError("query que deveria retornar exatamente uma linha nao retornou nenhuma")
+    return row
 
 
 @contextmanager
@@ -67,15 +84,15 @@ def _upsert_organizer(conn: psycopg.Connection, name: str | None) -> int | None:
     if not name or not name.strip():
         return None
     slug = slugify(name)
-    row = conn.execute(
+    cur = conn.execute(
         """
         INSERT INTO organizer (slug, name) VALUES (%s, %s)
         ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
         RETURNING id
         """,
         (slug, name.strip()),
-    ).fetchone()
-    return row[0]
+    )
+    return one_row(cur)[0]
 
 
 def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
@@ -173,7 +190,7 @@ def upsert_event(conn: psycopg.Connection, event: CanonicalEvent) -> int:
                 """,
                 params,
             )
-            event_id = cur.fetchone()[0]
+            event_id = one_row(cur)[0]
 
         for dist in event.distances:
             cur.execute(

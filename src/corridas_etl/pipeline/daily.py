@@ -18,8 +18,18 @@ Etapas (na ordem):
 A busca do app roda direto no Postgres (pg_trgm/PostGIS, ver sql/008_search.sql)
 — nao ha mais etapa de reindexacao: o dado gravado aqui ja e pesquisavel.
 
-Exit code 1 se alguma fonte falhou ou a qualidade acusou critico — bom para
-agendadores (Task Scheduler/cron/CI) sinalizarem o problema.
+EXIT CODES — o agendador (Task Scheduler/cron/GitHub Actions) so enxerga um
+numero, entao ele carrega QUANTAS fontes falharam. Distinguir isso importa:
+"1 de 7 fontes fora do ar" e rotina (a fonte volta amanha), "5 de 7" ou
+"qualidade critica" e coisa para olhar hoje.
+
+    0        tudo certo
+    1        qualidade acusou CRITICO (todas as fontes coletaram)
+    10 + N   N fontes falharam (11 = uma fonte, 12 = duas, ...)
+
+Quando ha falha de fonte E critico de qualidade, o codigo reporta as fontes
+(10+N) — a causa mais provavel do critico e justamente a fonte que nao coletou.
+O log final sempre lista as duas coisas por extenso.
 """
 
 from __future__ import annotations
@@ -40,6 +50,23 @@ ENRICH_DISTANCES_PER_RUN = 25
 
 # Consultas novas ao Nominatim por execucao (cache faz o resto).
 GEOCODE_PER_RUN = 100
+
+# Ver "EXIT CODES" na docstring do modulo.
+EXIT_OK = 0
+EXIT_QUALITY_CRITICAL = 1
+EXIT_SOURCES_BASE = 10
+# Teto do somatorio: exit codes so vao ate 255 no POSIX, e acima de 125 eles
+# colidem com os que o proprio shell usa (126/127/128+sinal).
+MAX_REPORTABLE_FAILURES = 89
+
+
+def exit_code(failed_count: int, has_criticals: bool) -> int:
+    """Traduz o resultado da execucao no numero que o agendador enxerga."""
+    if failed_count > 0:
+        return EXIT_SOURCES_BASE + min(failed_count, MAX_REPORTABLE_FAILURES)
+    if has_criticals:
+        return EXIT_QUALITY_CRITICAL
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -115,11 +142,22 @@ def main(argv: list[str] | None = None) -> int:
     for msg in report.criticals:
         log.error("CRIT  %s", msg)
 
+    total_sources = len(args.sources)
     if failed_sources:
-        log.error("fontes com falha nesta execucao: %s", ", ".join(failed_sources))
-    ok = not failed_sources and not report.criticals
-    log.info("pipeline diario: %s", "SUCESSO" if ok else "COM PROBLEMAS")
-    return 0 if ok else 1
+        log.error(
+            "fontes com falha: %d de %d (%s)",
+            len(failed_sources), total_sources, ", ".join(failed_sources),
+        )
+    if report.criticals:
+        log.error("qualidade: %d alerta(s) critico(s)", len(report.criticals))
+
+    code = exit_code(len(failed_sources), bool(report.criticals))
+    log.info(
+        "pipeline diario: %s (%d/%d fontes OK) — exit %d",
+        "SUCESSO" if code == EXIT_OK else "COM PROBLEMAS",
+        total_sources - len(failed_sources), total_sources, code,
+    )
+    return code
 
 
 if __name__ == "__main__":

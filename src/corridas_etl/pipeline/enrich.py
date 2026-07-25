@@ -35,7 +35,6 @@ from datetime import datetime, timedelta, timezone
 import psycopg
 from rapidfuzz import fuzz
 
-from ..utils.distances import parse_distance_km
 from ..utils.render import pages_inner_text
 from ..utils.text import normalize_name
 

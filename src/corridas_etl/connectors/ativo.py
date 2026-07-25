@@ -194,12 +194,15 @@ def _registration_status(item: dict) -> RegistrationStatus:
     dt = _parse_dt(item.get("dt_evento"))
     if dt is not None and dt.date() < date.today():
         return RegistrationStatus.CLOSED
+    pay_status = item.get("_pay_status")
+    if not isinstance(pay_status, str):
+        return RegistrationStatus.UNKNOWN
     return {
         "open": RegistrationStatus.OPEN,
         "closed": RegistrationStatus.CLOSED,
         "coming_soon": RegistrationStatus.COMING_SOON,
         "sold_out": RegistrationStatus.SOLD_OUT,
-    }.get(item.get("_pay_status"), RegistrationStatus.UNKNOWN)
+    }.get(pay_status, RegistrationStatus.UNKNOWN)
 
 
 def _classify_pay_page(body: str) -> str | None:

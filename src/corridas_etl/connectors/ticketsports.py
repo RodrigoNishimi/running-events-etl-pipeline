@@ -138,8 +138,7 @@ class TicketSportsConnector(BaseConnector):
         location_name = (ld.get("location") or {}).get("name") or ""
         city, state, country = _parse_location(location_name)
 
-        offers = _first_offer(ld.get("offers"))
-        status = _STATUS_MAP.get(offers.get("availability"), RegistrationStatus.UNKNOWN)
+        status = _availability_status(_first_offer(ld.get("offers")))
 
         organizer = (ld.get("organizer") or {}).get("name")
 
@@ -192,6 +191,19 @@ def _parse_start_date(value: str | None) -> datetime | None:
     except ValueError:
         return None
     return dt if dt.tzinfo else dt.replace(tzinfo=TZ_BRT)
+
+
+def _availability_status(offers: dict) -> RegistrationStatus:
+    """`offers.availability` -> status de inscricao.
+
+    O schema.org nao garante nem o campo nem o tipo: so uma string casa com o
+    mapa. Uma lista, por exemplo, nem seria hashable — `.get()` levantaria
+    TypeError e o evento inteiro se perderia.
+    """
+    availability = offers.get("availability")
+    if not isinstance(availability, str):
+        return RegistrationStatus.UNKNOWN
+    return _STATUS_MAP.get(availability, RegistrationStatus.UNKNOWN)
 
 
 def _first_offer(offers: object) -> dict:
@@ -254,7 +266,7 @@ def _parse_location(location_name: str) -> tuple[str | None, str | None, str]:
     # Procura o token de subdivisao (2 letras) varrendo de tras pra frente.
     for i in range(len(parts) - 1, 0, -1):
         if _UF_RE.match(parts[i]):
-            city = parts[i - 1].split(":")[-1].strip()
+            city: str | None = parts[i - 1].split(":")[-1].strip()
             if not city or city.isdigit():
                 city = None
             # Subdivisao so vale como UF em eventos brasileiros.
