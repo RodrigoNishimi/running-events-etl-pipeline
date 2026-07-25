@@ -1,6 +1,9 @@
 import json
 from datetime import date, datetime, timedelta
 
+import httpx
+import pytest
+
 from corridas_etl.connectors.liverun import (
     LiveRunConnector,
     _event_datetime,
@@ -75,6 +78,56 @@ def test_extract_page_extras_prefers_poster_over_kit_image():
     assert address == "Av. Dom Aguirre, 714 - Jardim Maria do Carmo, Sorocaba - SP, 18090-001"
     # imagem do evento, nao o thumbnail do kit (/kits/)
     assert image.endswith("/events/POSTER.png")
+
+
+# --- fallback do WAF (403 em CI) -------------------------------------------
+#
+# Regressao do runner diario de 2026-07-25: do IP de datacenter do GitHub
+# Actions o /calendario voltou 403. O conector passou a se anunciar como browser
+# e, se ainda assim for barrado, refaz o unico request via Playwright.
+
+def _http_error(conn, status: int):
+    """Faz o http_get do conector levantar `status` como o httpx levantaria."""
+    def raise_status(url):
+        request = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError(
+            f"{status}", request=request, response=httpx.Response(status, request=request)
+        )
+
+    conn.http_get = raise_status
+
+
+def test_calendar_falls_back_to_browser_on_403(monkeypatch):
+    conn = _conn()
+    _http_error(conn, 403)
+    monkeypatch.setattr(
+        "corridas_etl.utils.render.page_html", lambda url, **kw: _CALENDAR
+    )
+
+    cards = dict(_parse_calendar(conn._calendar_html()))
+
+    assert set(cards) == {"live-run-sorocaba-2026", "live42k-brasilia"}
+
+
+def test_calendar_does_not_fall_back_on_404(monkeypatch):
+    """404 nao e WAF: nao gasta um Chromium — o erro sobe e isola a fonte."""
+    conn = _conn()
+    _http_error(conn, 404)
+    monkeypatch.setattr(
+        "corridas_etl.utils.render.page_html",
+        lambda url, **kw: pytest.fail("nao deveria abrir o browser em 404"),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        conn._calendar_html()
+
+
+def test_connector_announces_browser_ua():
+    conn = LiveRunConnector()
+    try:
+        assert "Mozilla/5.0" in conn._client.headers["User-Agent"]
+    finally:
+        conn.close()
 
 
 # --- parse -----------------------------------------------------------------

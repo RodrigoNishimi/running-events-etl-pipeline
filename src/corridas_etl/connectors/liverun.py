@@ -28,18 +28,29 @@ Decisoes de campo:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable
 
+import httpx
 from selectolax.parser import HTMLParser
 
 from ..models import Distance, RawPayload, RegistrationStatus, SourceEventRecord
 from ..utils.geo import is_br_uf
+from ..utils.render import BROWSER_UA
 from .base import BaseConnector
+
+log = logging.getLogger(__name__)
 
 BASE_URL = "https://liverun.com.br"
 CALENDAR_URL = f"{BASE_URL}/calendario"
+
+# O site fica atras de um WAF que recusa clientes nao-browser — invisivel
+# rodando em casa, mas evidente a partir de IPs de datacenter (CI): 403 no
+# /calendario. O UA de browser resolve a maioria; quando nem isso basta
+# (checagem de TLS/JS), o discover cai para o Playwright.
+_WAF_STATUSES = frozenset({401, 403, 503})
 
 TZ_BRT = timezone(timedelta(hours=-3))
 
@@ -59,13 +70,35 @@ class LiveRunConnector(BaseConnector):
 
     def __init__(self) -> None:
         super().__init__()
+        self._client.headers["User-Agent"] = BROWSER_UA
         # Cache dos cards do calendario, indexado por slug (preenchido em discover).
         self._cards: dict[str, dict] = {}
 
     # -- Descoberta (1 request no calendario) --------------------------------
 
+    def _calendar_html(self) -> str:
+        """HTML do /calendario: HTTP direto e, se o WAF barrar, browser real.
+
+        O fallback custa um Chromium headless, entao so vale por ser UM request
+        (o calendario inteiro vem de uma vez). As paginas /etapa/<slug> seguem
+        em HTTP puro: sao ~26 e ja sao best-effort.
+        """
+        try:
+            return self.http_get(CALENDAR_URL).text
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in _WAF_STATUSES:
+                raise
+            log.warning(
+                "liverun: %s no calendario via HTTP — refazendo com browser (Playwright)",
+                exc.response.status_code,
+            )
+
+        from ..utils.render import page_html
+
+        return page_html(CALENDAR_URL)
+
     def discover(self) -> Iterable[str]:
-        html = self.http_get(CALENDAR_URL).text
+        html = self._calendar_html()
         for slug, card in _parse_calendar(html):
             self._cards[slug] = card
             yield slug

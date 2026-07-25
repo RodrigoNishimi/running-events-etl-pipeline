@@ -36,6 +36,12 @@ _AUDIENCE_SUFFIX_RE = re.compile(
 class IguanaSportsConnector(BaseConnector):
     source = "iguanasports"
 
+    # O rate limit do Shopify e por IP e conta a loja inteira (nao so o bot):
+    # de um IP de datacenter compartilhado (CI) o `/products.json` volta 429 no
+    # ritmo global de 2s. Sao ~8 eventos, entao esperar mais nao custa quase nada
+    # — e sai mais barato que apanhar de 429 e refazer com backoff.
+    request_delay_seconds = 6.0
+
     def discover(self) -> Iterable[str]:
         resp = self.http_get(f"{BASE_URL}/products.json?limit=250")
         for product in resp.json().get("products", []):
