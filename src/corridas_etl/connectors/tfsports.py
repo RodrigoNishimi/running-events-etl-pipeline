@@ -118,8 +118,11 @@ class TFSportsConnector(BaseConnector):
         if state is None and is_br_uf(ed_state):
             state = str(ed_state).upper()
 
-        cta = (event_data or {}).get("subscriptionCta") or {}
-        official_url = cta.get("url") or (ld or {}).get("url") or payload.source_url
+        # subscriptionCta.url aponta para link-prod.tfsports.com.br/events/<slug>,
+        # que redireciona para a pagina generica de download do app — nao serve
+        # como official_url. O JSON-LD (ld.url) traz a propria pagina canonica
+        # da etapa (www.tfsports.com.br/run-series/<slug>), que e o link certo.
+        official_url = (ld or {}).get("url") or payload.source_url
 
         return SourceEventRecord(
             source=self.source,

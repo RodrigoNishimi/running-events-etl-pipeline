@@ -80,7 +80,9 @@ def test_parse_full_event():
     assert rec.country == "BR"
     assert rec.organizer_name == "TFSports"
     assert rec.registration_status == RegistrationStatus.OPEN     # CTA presente
-    assert rec.official_url.startswith("https://link-prod.tfsports.com.br/")
+    # official_url e a pagina canonica (JSON-LD), nao o link-prod da CTA (que
+    # redireciona para a pagina generica de download do app).
+    assert rec.official_url == "https://www.tfsports.com.br/run-series/rio-mar-recife-2026/"
     assert rec.image_url == "https://cdn.tfsports/kv.png"          # imagem do JSON-LD
     assert {d.distance_km for d in rec.distances} == {21.0, 10.0, 5.0}
     assert "Recife - PE" in rec.address
